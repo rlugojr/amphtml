@@ -37,7 +37,7 @@ describe('CustomElement', () => {
   let testElementIsReadyToBuild = true;
 
   class TestElement extends BaseElement {
-    isLayoutSupported(layout) {
+    isLayoutSupported(unusedLayout) {
       return true;
     }
     createdCallback() {
@@ -735,7 +735,7 @@ describe('CustomElement Service Elements', () => {
 
   it('getPlaceholder should return the first placeholder', () => {
     const placeholder1 = element.appendChild(createWithAttr('placeholder'));
-    const placeholder2 = element.appendChild(createWithAttr('placeholder'));
+    element.appendChild(createWithAttr('placeholder'));
     expect(element.getPlaceholder()).to.equal(placeholder1);
   });
 
@@ -1002,6 +1002,28 @@ describe('CustomElement Loading Indicator', () => {
       expect(toggle.firstCall.args[1]).to.equal(true);
     });
   });
+
+  it('should ignore loading "on" if layout completed before vsync', () => {
+    resourcesMock.expects('deferMutate').once();
+    element.prepareLoading_();
+    element.toggleLoading_(true);
+    element.build(true);
+    return element.layoutCallback().then(() => {
+      expect(vsyncTasks).to.have.length(2);
+
+      // The first mutate started by toggleLoading_(true), but it must
+      // immediately proceed to switch it to off.
+      vsyncTasks.shift()();
+      expect(element.loadingContainer_).to.have.class('amp-hidden');
+      expect(element.loadingElement_).to.not.have.class('amp-active');
+
+      // Second vsync should perform cleanup.
+      vsyncTasks.shift()();
+      expect(element.loadingContainer_).to.be.null;
+    }, () => {
+      throw new Error('Should never happen.');
+    });
+  });
 });
 
 
@@ -1092,6 +1114,7 @@ describe('CustomElement Overflow Element', () => {
   });
 
   it('should unset overflow', () => {
+    element.getOverflowElement();
     overflowElement.classList.toggle('amp-visible', true);
     element.overflowCallback(false, 117);
     expect(element.overflowElement_).to.equal(overflowElement);

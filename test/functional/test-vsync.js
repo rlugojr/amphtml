@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import {Vsync} from '../../src/vsync';
-import {viewerFor} from '../../src/viewer';
+import {Vsync} from '../../src/service/vsync-impl';
 import * as sinon from 'sinon';
 
 
@@ -121,6 +120,22 @@ describe('vsync', () => {
       });
     }).then(() => {
       expect(result).to.equal('me1mu1me2mu2me3mu3');
+    });
+  });
+
+  it('should return a promise from measurePromise that runs measurer', () => {
+    let measured = false;
+    return vsync.measurePromise(() => {
+      measured = true;
+    }).then(() => {
+      expect(measured).to.be.true;
+    });
+  });
+
+  it('should return a promise from mutatePromise that runs mutator', () => {
+    const mutator = sandbox.spy();
+    return vsync.mutatePromise(mutator).then(() => {
+      expect(mutator.callCount).to.equal(1);
     });
   });
 
@@ -328,8 +343,6 @@ describe('vsync', () => {
   });
 
   it('should reject mutate series when invisible', () => {
-    let rafHandler;
-    vsync.raf_ = handler => rafHandler = handler;
     viewer.isVisible = () => false;
     const mutatorSpy = sinon.spy();
 
@@ -349,12 +362,10 @@ describe('vsync', () => {
 describe('RAF polyfill', () => {
   let sandbox;
   let clock;
-  let visible;
 
   beforeEach(() => {
     sandbox = sinon.sandbox.create();
     clock = sandbox.useFakeTimers();
-    visible = true;
   });
 
   afterEach(() => {
@@ -364,7 +375,7 @@ describe('RAF polyfill', () => {
 
   const viewer = {
     isVisible: () => true,
-    onVisibilityChanged: handler => {}
+    onVisibilityChanged: unusedHandler => {}
   };
 
   const vsync = new Vsync({

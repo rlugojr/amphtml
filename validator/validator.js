@@ -43,10 +43,12 @@ goog.require('goog.asserts');
 goog.require('goog.string');
 goog.require('goog.structs.Map');
 goog.require('goog.structs.Set');
+goog.require('goog.uri.utils');
 goog.require('parse_css.BlockType');
 goog.require('parse_css.parseAStylesheet');
 goog.require('parse_css.tokenize');
 
+goog.provide('amp.validator.CssLengthAndUnit');  // Only for testing.
 goog.provide('amp.validator.Terminal');
 goog.provide('amp.validator.renderValidationResult');
 goog.provide('amp.validator.validateString');
@@ -121,40 +123,53 @@ function specificity(code) {
     case amp.validator.ValidationError.Code.
         MANDATORY_CDATA_MISSING_OR_INCORRECT:
       return 1;
-    case amp.validator.ValidationError.Code.WRONG_PARENT_TAG:
+    case amp.validator.ValidationError.Code.DISALLOWED_TAG_ANCESTOR:
       return 2;
-    case amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING:
+    case amp.validator.ValidationError.Code.WRONG_PARENT_TAG:
       return 3;
-    case amp.validator.ValidationError.Code.DISALLOWED_TAG:
+    case amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING:
       return 4;
-    case amp.validator.ValidationError.Code.DISALLOWED_ATTR:
+    case amp.validator.ValidationError.Code.DISALLOWED_TAG:
       return 5;
-    case amp.validator.ValidationError.Code.INVALID_ATTR_VALUE:
+    case amp.validator.ValidationError.Code.DISALLOWED_ATTR:
       return 6;
-    case amp.validator.ValidationError.Code.MANDATORY_ATTR_MISSING:
+    case amp.validator.ValidationError.Code.INVALID_ATTR_VALUE:
       return 7;
-    case amp.validator.ValidationError.Code.DUPLICATE_UNIQUE_TAG:
+    case amp.validator.ValidationError.Code.MANDATORY_ATTR_MISSING:
       return 8;
-    case amp.validator.ValidationError.Code.STYLESHEET_TOO_LONG:
+    case amp.validator.ValidationError.Code.DUPLICATE_UNIQUE_TAG:
       return 9;
-    case amp.validator.ValidationError.Code.CSS_SYNTAX:
+    case amp.validator.ValidationError.Code.STYLESHEET_TOO_LONG:
       return 10;
-    case amp.validator.ValidationError.Code.
-        MANDATORY_PROPERTY_MISSING_FROM_ATTR_VALUE:
+    case amp.validator.ValidationError.Code.CSS_SYNTAX:
       return 11;
     case amp.validator.ValidationError.Code.
-        INVALID_PROPERTY_VALUE_IN_ATTR_VALUE:
+        MANDATORY_PROPERTY_MISSING_FROM_ATTR_VALUE:
       return 12;
-    case amp.validator.ValidationError.Code.DISALLOWED_PROPERTY_IN_ATTR_VALUE:
+    case amp.validator.ValidationError.Code.
+        INVALID_PROPERTY_VALUE_IN_ATTR_VALUE:
       return 13;
-    case amp.validator.ValidationError.Code.MUTUALLY_EXCLUSIVE_ATTRS:
+    case amp.validator.ValidationError.Code.DISALLOWED_PROPERTY_IN_ATTR_VALUE:
       return 14;
-    case amp.validator.ValidationError.Code.DEV_MODE_ENABLED:
+    case amp.validator.ValidationError.Code.MUTUALLY_EXCLUSIVE_ATTRS:
       return 15;
-    case amp.validator.ValidationError.Code.DEPRECATED_ATTR:
+    case amp.validator.ValidationError.Code.UNESCAPED_TEMPLATE_IN_ATTR_VALUE:
       return 16;
-    case amp.validator.ValidationError.Code.DEPRECATED_TAG:
+    case amp.validator.ValidationError.Code.TEMPLATE_PARTIAL_IN_ATTR_VALUE:
       return 17;
+    case amp.validator.ValidationError.Code.TEMPLATE_IN_ATTR_NAME:
+      return 18;
+    case amp.validator.ValidationError.Code.
+        INCONSISTENT_UNITS_FOR_WIDTH_AND_HEIGHT:
+      return 19;
+    case amp.validator.ValidationError.Code.IMPLIED_LAYOUT_INVALID:
+      return 20;
+    case amp.validator.ValidationError.Code.DEV_MODE_ENABLED:
+      return 21;
+    case amp.validator.ValidationError.Code.DEPRECATED_ATTR:
+      return 101;
+    case amp.validator.ValidationError.Code.DEPRECATED_TAG:
+      return 102;
     default:
       goog.asserts.fail('Unrecognized Code: ' + code);
   }
@@ -245,7 +260,8 @@ amp.validator.Terminal.prototype.error = function(msg) {
 function errorLine(filenameOrUrl, error) {
   const line = error.line || 1;
   const col = error.col || 0;
-  let errorLine = filenameOrUrl + ':' + line + ':' + col + ' ' +
+  let errorLine = goog.uri.utils.removeFragment(filenameOrUrl) +
+      ':' + line + ':' + col + ' ' +
       error.code + ' ' + error.detail;
   if (error.specUrl) {
     errorLine += ' (see ' + error.specUrl + ')';
@@ -292,9 +308,7 @@ amp.validator.ValidationResult.prototype.outputToTerminal =
   }
   for (const error of this.errors) {
     if (error.severity ===
-        amp.validator.ValidationError.Severity.ERROR ||
-        error.severity ===
-        amp.validator.ValidationError.Severity.PROD_WARNING) {
+        amp.validator.ValidationError.Severity.ERROR) {
       terminal.error(errorLine(url, error));
     } else {
       terminal.warn(errorLine(url, error));
@@ -410,6 +424,19 @@ TagNameStack.prototype.getParent = function() {
   return '$ROOT';
 };
 
+/**
+ * Returns true if the current tag has ancestor with the given tag name.
+ * @param {!string} ancestor
+ * @return {boolean}
+ */
+TagNameStack.prototype.hasAncestor = function(ancestor) {
+  // Skip the last element, which is the current tag.
+  for (let i = 0; i < this.stack_.length - 1; ++i) {
+    if (this.stack_[i] === ancestor)
+      return true;
+  }
+  return false;
+};
 
 /**
  * This matcher maintains a constraint to check which an opening tag
@@ -543,7 +570,7 @@ CdataMatcher.prototype.match = function(cdata, context, validationResult) {
     return;
   }
   if (cdataSpec.cdataRegex !== null) {
-    const cdataRegex = new RegExp(cdataSpec.cdataRegex, 'g');
+    const cdataRegex = new RegExp('^(' + cdataSpec.cdataRegex + ')$');
     if (!cdataRegex.test(cdata)) {
       context.addError(
           amp.validator.ValidationError.Code.
@@ -574,7 +601,7 @@ CdataMatcher.prototype.match = function(cdata, context, validationResult) {
       const lineCol = new LineCol(errorToken.line, errorToken.col);
       context.addErrorWithLineCol(
           lineCol, amp.validator.ValidationError.Code.CSS_SYNTAX,
-          errorToken.msg, /*url=*/'', validationResult);
+          errorToken.msg, /* url */ '', validationResult);
     }
 
     // TODO: This needs improvement to validate all fields recursively. For now,
@@ -587,8 +614,7 @@ CdataMatcher.prototype.match = function(cdata, context, validationResult) {
           const lineCol = new LineCol(cssRule.line, cssRule.col);
           context.addErrorWithLineCol(
               lineCol, amp.validator.ValidationError.Code.CSS_SYNTAX,
-              'Invalid CSS rule of type: @' + cssRule.name,
-              /*url=*/'', validationResult);
+              'CSS @' + cssRule.name, /* url */ '', validationResult);
         }
       }
     }
@@ -605,7 +631,7 @@ CdataMatcher.prototype.match = function(cdata, context, validationResult) {
     if (context.getProgress(validationResult).complete) {
       return;
     }
-    const blacklistRegex = new RegExp(blacklist.regex, 'gi');
+    const blacklistRegex = new RegExp(blacklist.regex, 'i');
     if (blacklistRegex.test(cdata)) {
       context.addError(
           amp.validator.ValidationError.Code.
@@ -631,15 +657,12 @@ CdataMatcher.prototype.getLineCol = function() {
  * @return {amp.validator.ValidationError.Severity}
  */
 function SeverityFor(code) {
-  if (code === amp.validator.ValidationError.Code.DEV_MODE_ENABLED) {
-    return amp.validator.ValidationError.Severity.DEV_WARNING;
+  if (code === amp.validator.ValidationError.Code.DEPRECATED_TAG) {
+    return amp.validator.ValidationError.Severity.WARNING;
   } else if (code === amp.validator.ValidationError.Code.DEPRECATED_ATTR) {
-    return amp.validator.ValidationError.Severity.PROD_WARNING;
-  } else if (code === amp.validator.ValidationError.Code.DEPRECATED_TAG) {
-    return amp.validator.ValidationError.Severity.PROD_WARNING;
-  } else {
-    return amp.validator.ValidationError.Severity.ERROR;
+    return amp.validator.ValidationError.Severity.WARNING;
   }
+  return amp.validator.ValidationError.Severity.ERROR;
 }
 
 
@@ -662,12 +685,6 @@ const Context = function Context(maxErrors) {
    */
   this.maxErrors_ = maxErrors;
   /**
-   * The mandatory tagspec ids that we've validated.
-   * @type {!Array<number>}
-   * @private
-   */
-  this.mandatoryTagSpecsValidated_ = [];
-  /**
    * The mandatory alternatives that we've validated.
    * @type {!goog.structs.Set<string>}
    * @private
@@ -687,7 +704,7 @@ const Context = function Context(maxErrors) {
   /**
    * @private
    */
-  this.uniqueTagspecsValidated_ = new goog.structs.Set();
+  this.tagspecsValidated_ = new goog.structs.Set();
 };
 
 /**
@@ -762,9 +779,8 @@ Context.prototype.addErrorWithLineCol = function(
   }
   const severity = SeverityFor(validationErrorCode);
 
-  // The Javascript Validator is always in dev mode, so unless the severity
-  // is a DEV_WARNING we have a failure.
-  if (severity !== amp.validator.ValidationError.Severity.DEV_WARNING) {
+  // If any of the errors amount to more than a WARNING, validation fails.
+  if (severity !== amp.validator.ValidationError.Severity.WARNING) {
     validationResult.status = amp.validator.ValidationResult.Status.FAIL;
   }
   if (progress.wantsMoreErrors) {
@@ -802,13 +818,24 @@ Context.prototype.addError = function(
 };
 
 /**
- * recordValidatedMandatoryTagSpec and mandatoryTagSpecsValidated
- * are used *only* by |ParsedValidatorRules|, which by itself does
- * not have any mutable state.
- * @param {number} tagSpecId id of recorded tagSpec
+ * Records a tag spec that's been validated. This method is only used by
+ * ParsedValidatorRules, which by itself does not have any mutable state.
+ * @param {number} tagSpecId id of tagSpec to record.
+ * @return {boolean} whether or not the tag spec had been encountered before.
  */
-Context.prototype.recordValidatedMandatoryTagSpec = function(tagSpecId) {
-  this.mandatoryTagSpecsValidated_.push(tagSpecId);
+Context.prototype.recordTagspecValidated = function(tagSpecId) {
+  const duplicate = this.tagspecsValidated_.contains(tagSpecId);
+  if (!duplicate) {
+    this.tagspecsValidated_.add(tagSpecId);
+  }
+  return !duplicate;
+};
+
+/**
+ * @return {!goog.structs.Set<number>}
+ */
+Context.prototype.getTagspecsValidated = function() {
+  return this.tagspecsValidated_;
 };
 
 /**
@@ -825,29 +852,6 @@ Context.prototype.recordMandatoryAlternativeSatisfied = function(alternative) {
  */
 Context.prototype.getMandatoryAlternativesSatisfied = function() {
   return this.mandatoryAlternativesSatisfied_;
-};
-
-/**
- * Records a unique tag spec that's been validated.
- * @param {number} tagSpecId id of tagSpec to record.
- * @return {boolean} whether or not the tag spec had been encountered before.
- */
-Context.prototype.recordUniqueTagspecValidated = function(tagSpecId) {
-  const duplicate = this.uniqueTagspecsValidated_.contains(tagSpecId);
-  if (!duplicate) {
-    this.uniqueTagspecsValidated_.add(tagSpecId);
-  }
-  return !duplicate;
-};
-
-/**
- * Returns all validated mandatory tagSpec ids.
- * @return {!Array<number>} all validated mandatory tagSpec ids.
- */
-Context.prototype.mandatoryTagSpecsValidated = function() {
-  this.mandatoryTagSpecsValidated_ = sortAndUniquify(
-      this.mandatoryTagSpecsValidated_);
-  return this.mandatoryTagSpecsValidated_;
 };
 
 /** @return {CdataMatcher} */
@@ -980,14 +984,16 @@ ParsedAttrSpec.prototype.validateAttrValueProperties = function(
 
 
 /**
- * Collect the AttrSpec pointers for a given |tagSpec|.
- * There are three ways to specify attributes:
- * (1) within a TagSpec::attrs;
- * (2) via TagSpec::attrLists which references lists by key.
- * (3) within the GLOBAL_ATTRIBUTES attrs.
- * It's possible to provide multiple specifications for the same attribute
- * name, but for any given tag only one such specification can be active. The
- * precedence is (1), (2), (3).
+ * Collect the AttrSpec pointers for a given |tagspec|.
+ * There are four ways to specify attributes:
+ * (1) implicitly by a tag spec, if the tag spec has the amp_layout field
+ * set - in this case, the AMP_LAYOUT_ATTRS are assumed;
+ * (2) within a TagSpec::attrs;
+ * (3) via TagSpec::attr_lists which references lists by key;
+ * (4) within the $GLOBAL_ATTRS TagSpec::attr_list.
+ * It's possible to provide multiple
+ * specifications for the same attribute name, but for any given tag only one
+ * such specification can be active. The precedence is (1), (2), (3), (4)
  * @param {!Object} tagSpec
  * @param {!goog.structs.Map<string, !amp.validator.AttrList>} rulesAttrMap
  * @return {!Array<!Object>} all of the AttrSpec pointers
@@ -995,14 +1001,26 @@ ParsedAttrSpec.prototype.validateAttrValueProperties = function(
 function GetAttrsFor(tagSpec, rulesAttrMap) {
   const attrs = [];
   const namesSeen = new goog.structs.Set();
-  // (1) attributes specified within |tagSpec|.
+  // (1) layout attrs.
+  if (tagSpec.ampLayout !== null) {
+    const layoutSpecs = rulesAttrMap.get('$AMP_LAYOUT_ATTRS');
+    if (layoutSpecs) {
+      for (const spec of layoutSpecs.attrs) {
+        if (!namesSeen.contains(spec.name)) {
+          namesSeen.add(spec.name);
+          attrs.push(spec);
+        }
+      }
+    }
+  }
+  // (2) attributes specified within |tagSpec|.
   for (const spec of tagSpec.attrs) {
     if (!namesSeen.contains(spec.name)) {
       namesSeen.add(spec.name);
       attrs.push(spec);
     }
   }
-  // (2) attributes specified via reference to an attr_list.
+  // (3) attributes specified via reference to an attr_list.
   for (const tagSpec_key of tagSpec.attrLists) {
     const specs = rulesAttrMap.get(tagSpec_key);
     goog.asserts.assert(specs !== undefined);
@@ -1014,9 +1032,11 @@ function GetAttrsFor(tagSpec, rulesAttrMap) {
     }
   }
   // (3) attributes specified in the global_attr list.
-  const specs = rulesAttrMap.get('$GLOBAL_ATTRIBUTES');
-  goog.asserts.assert(specs !== undefined);
-  for (const spec of specs.attrs) {
+  const globalSpecs = rulesAttrMap.get('$GLOBAL_ATTRS');
+  if (!globalSpecs) {
+    return attrs;
+  }
+  for (const spec of globalSpecs.attrs) {
     if (!namesSeen.contains(spec.name)) {
       namesSeen.add(spec.name);
       attrs.push(spec);
@@ -1039,14 +1059,167 @@ function getDetailOrName(tagSpec) {
 
 
 /**
- * This wrapper class provides access to a TagSpec and a tag id
- * which is unique within its context, the ParsedValidatorRules.
- * @param {!amp.validator.TagSpec} tagSpec
- * @param {number} tagId
- * @param {!goog.structs.Map<string, !amp.validator.AttrList>} attrListsByName
+ * @param {string} layout
+ * @return {!amp.validator.AmpLayout.Layout}
+ */
+function parseLayout(layout) {
+  if (layout === undefined) {
+    return amp.validator.AmpLayout.Layout.UNKNOWN;
+  }
+  const normLayout = layout.toUpperCase().replace('-', '_');
+  for (const k in amp.validator.AmpLayout.Layout) {
+    if (amp.validator.AmpLayout.Layout[k] == normLayout) {
+      return amp.validator.AmpLayout.Layout[k];
+    }
+  }
+  return amp.validator.AmpLayout.Layout.UNKNOWN;
+}
+
+
+/**
+ * Parses a width or height layout attribute, for the determining the layout
+ * of AMP tags (e.g. <amp-img width="42px" etc.).
+ * @param {string|undefined} input The input attribute value to be parsed.
+ * @param {boolean} allowAuto Whether or not to allow the 'auto' value as
+ *    a value.
  * @constructor
  */
-const ParsedTagSpec = function ParsedTagSpec(tagSpec, tagId, attrListsByName) {
+amp.validator.CssLengthAndUnit = function(input, allowAuto) {
+  /**
+   * Whether the value or unit is invalid. Note that passing
+   * undefined as |input| is considered valid.
+   * @type {boolean}
+   */
+  this.isValid = false;
+  /**
+   * Whether the attribute value is set.
+   * @type {boolean}
+   */
+  this.isSet = false;
+  /**
+   * Whether the attribute value is 'auto'. This is a special value that
+   * indicates that the value gets derived from the context. In practice
+   * that's only ever the case for a width.
+   * @type {boolean}
+   */
+  this.isAuto = false;
+  /**
+   * The unit, 'px' being the default in case it's absent.
+   * @type {string}
+   */
+  this.unit = 'px';
+
+  if (input === undefined) {
+    this.isValid = true;
+    return;
+  }
+  this.isSet = true;
+  if (input === 'auto') {
+    this.isAuto = true;
+    this.isValid = allowAuto;
+    return;
+  }
+  const re = new RegExp('^\\d+(?:\\.\\d+)?(px|em|rem|vh|vw|vmin|vmax)?$');
+  const match = re.exec(input);
+  if (match !== null) {
+    this.isValid = true;
+    this.unit = match[1] || 'px';
+  }
+};
+
+/**
+ * Calculates the effective width from the input layout and width.
+ * This involves considering that some elements, such as amp-audio and
+ * amp-pixel, have natural dimensions (browser or implementation-specific
+ * defaults for width / height).
+ * @param {!amp.validator.AmpLayout} spec
+ * @param {!amp.validator.AmpLayout.Layout} inputLayout
+ * @param {!amp.validator.CssLengthAndUnit} inputWidth
+ * @return {!amp.validator.CssLengthAndUnit}
+ */
+function CalculateWidth(spec, inputLayout, inputWidth) {
+  if ((inputLayout === amp.validator.AmpLayout.Layout.UNKNOWN ||
+      inputLayout === amp.validator.AmpLayout.Layout.FIXED) &&
+      !inputWidth.isSet && spec.definesDefaultWidth) {
+    return new amp.validator.CssLengthAndUnit('1px', /* allowAuto */ false);
+  }
+  return inputWidth;
+}
+
+
+/**
+ * Calculates the effective height from input layout and input height.
+ * @param {!amp.validator.AmpLayout} spec
+ * @param {!amp.validator.AmpLayout.Layout} inputLayout
+ * @param {!amp.validator.CssLengthAndUnit} inputHeight
+ * @return {!amp.validator.CssLengthAndUnit}
+ */
+function CalculateHeight(spec, inputLayout, inputHeight) {
+  if ((inputLayout === amp.validator.AmpLayout.Layout.UNKNOWN ||
+      inputLayout === amp.validator.AmpLayout.Layout.FIXED ||
+      inputLayout === amp.validator.AmpLayout.Layout.FIXED_HEIGHT) &&
+      !inputHeight.isSet && spec.definesDefaultHeight) {
+    return new amp.validator.CssLengthAndUnit('1px', /* allowAuto */ false);
+  }
+  return inputHeight;
+}
+
+/**
+ * Calculates the layout; this depends on the width / height
+ * calculation above. It happens last because web designers often make
+ * fixed-sized mocks first and then the layout determines how things
+ * will change for different viewports / devices / etc.
+ * @param {!amp.validator.AmpLayout.Layout} inputLayout
+ * @param {!amp.validator.CssLengthAndUnit} width
+ * @param {!amp.validator.CssLengthAndUnit} height
+ * @param {string?} sizesAttr
+ * @return {!amp.validator.AmpLayout.Layout}
+ */
+function CalculateLayout(inputLayout, width, height, sizesAttr) {
+  if (inputLayout !== amp.validator.AmpLayout.Layout.UNKNOWN) {
+    return inputLayout;
+  } else if (!width.isSet && !height.isSet) {
+    return amp.validator.AmpLayout.Layout.CONTAINER;
+  } else if (height.isSet && (!width.isSet || width.isAuto)) {
+    return amp.validator.AmpLayout.Layout.FIXED_HEIGHT;
+  } else if (height.isSet && width.isSet && sizesAttr !== undefined) {
+    return amp.validator.AmpLayout.Layout.RESPONSIVE;
+  } else {
+    return amp.validator.AmpLayout.Layout.FIXED;
+  }
+}
+
+
+/**
+ * We only track (that is, add them to Context.RecordTagspecValidated) validated
+ * tagspecs as necessary. That is, if it's needed for document scope validation:
+ * - Mandatory tags
+ * - Unique tags
+ * - Tags (identified by their detail) that are required by other tags.
+ * @param {!amp.validator.TagSpec} tag
+ * @param {!goog.structs.Set<string>} detailsToTrack
+ * @return {!boolean}
+ */
+function shouldRecordTagspecValidated(tag, detailsToTrack) {
+  return tag.mandatory || tag.unique ||
+      tag.detail != null && detailsToTrack.contains(tag.detail);
+}
+
+
+/**
+ * This wrapper class provides access to a TagSpec and a tag id
+ * which is unique within its context, the ParsedValidatorRules.
+ * @param {!string} templateSpecUrl
+ * @param {!goog.structs.Map<string, !amp.validator.AttrList>} attrListsByName
+ * @param {!goog.structs.Map<string, number>} tagspecIdsByDetail
+ * @param {!boolean} shouldRecordTagspecValidated
+ * @param {!amp.validator.TagSpec} tagSpec
+ * @param {number} tagId
+ * @constructor
+ */
+const ParsedTagSpec = function ParsedTagSpec(
+    templateSpecUrl, attrListsByName, tagspecIdsByDetail,
+    shouldRecordTagspecValidated, tagSpec, tagId) {
   /**
    * @type {!amp.validator.TagSpec}
    * @private
@@ -1081,6 +1254,16 @@ const ParsedTagSpec = function ParsedTagSpec(tagSpec, tagId, attrListsByName) {
    * @private
    */
   this.mandatoryOneofs_ = [];
+  /**
+   * @type {!string}
+   * @private
+   */
+  this.templateSpecUrl_ = templateSpecUrl;
+  /**
+   * @type {!boolean}
+   * @private
+   */
+  this.shouldRecordTagspecValidated_ = shouldRecordTagspecValidated;
 
   const attrs = GetAttrsFor(tagSpec, attrListsByName);
   for (let i = 0; i < attrs.length; ++i) {
@@ -1099,13 +1282,14 @@ const ParsedTagSpec = function ParsedTagSpec(tagSpec, tagId, attrListsByName) {
     }
   }
   this.mandatoryOneofs_ = sortAndUniquify(this.mandatoryOneofs_);
-  // The Javascript validator allows a relative location of the ampengine
-  // script, in addition to the official allowances. This would be dangerous
-  // in production so the rule is not in the official validator file
-  // (validator.protoascii) but we hack it into here.
-  if (tagSpec.detail == 'amphtml engine v1.js script') {
-    const parsedAttrSpec = this.attrsByName_['src'];
-    parsedAttrSpec.spec_.valueRegex += '|\\.\\./dist/amp\\.js';
+
+  /**
+   * @type {!Array<number>}
+   * @private
+   */
+  this.alsoRequires_ = [];
+  for (const detail of tagSpec.alsoRequires) {
+    this.alsoRequires_.push(tagspecIdsByDetail.get(detail));
   }
 };
 
@@ -1126,6 +1310,161 @@ ParsedTagSpec.prototype.getSpec = function() {
 };
 
 /**
+ * A TagSpec may specify other tags to be required as well, when that
+ * tag is used. This accessor returns the IDs for the tagspecs that
+ * are also required if |this| tag occurs in the document.
+ * @return {!Array<number>}
+ */
+ParsedTagSpec.prototype.getAlsoRequires = function() {
+  return this.alsoRequires_;
+};
+
+/**
+ * Whether or not the tag should be recorded via
+ * Context.recordTagspecValidated if it was validated
+ * successfullly. For performance, this is only done for tags that are
+ * mandatory, unique, or possibly required by some other tag.
+ * @return {boolean}
+ */
+ParsedTagSpec.prototype.shouldRecordTagspecValidated = function() {
+  return this.shouldRecordTagspecValidated_;
+};
+
+/**
+ * Returns true if |value| contains mustache template syntax.
+ * @param {!string} value
+ * @return {boolean}
+ */
+ParsedTagSpec.prototype.valueHasTemplateSyntax = function(value) {
+  // Mustache (https://mustache.github.io/mustache.5.html), our template
+  // system, supports replacement tags that start with {{ and end with }}.
+  // We relax attribute value rules if the value contains this syntax as we
+  // will validate the post-processed tag instead.
+  const mustacheTag = new RegExp('{{.*}}');
+  return mustacheTag.test(value);
+};
+
+/**
+ * Returns true if |value| contains a mustache unescaped template syntax.
+ * @param {!string} value
+ * @return {boolean}
+ */
+ParsedTagSpec.prototype.valueHasUnescapedTemplateSyntax = function(value) {
+  // Mustache (https://mustache.github.io/mustache.5.html), our template
+  // system, supports {{{unescaped}}} or {{{&unescaped}}} and there can
+  // be whitespace after the 2nd '{'. We disallow these in attribute Values.
+  const unescapedOpenTag = new RegExp('{{\\s*[&{]');
+  return unescapedOpenTag.test(value);
+};
+
+/**
+ * Returns true if |value| contains a mustache partials template syntax.
+ * @param {!string} value
+ * @return {boolean}
+ */
+ParsedTagSpec.prototype.valueHasPartialsTemplateSyntax = function(value) {
+  // Mustache (https://mustache.github.io/mustache.5.html), our template
+  // system, supports 'partials' which include other Mustache templates
+  // in the format of {{>partial}} and there can be whitespace after the {{.
+  // We disallow partials in attribute values.
+  const partialsTag = new RegExp('{{\\s*>');
+  return partialsTag.test(value);
+};
+
+/**
+ * Validates the layout for the given tag. This involves checking the
+ * layout, width, height, sizes attributes with AMP specific logic.
+ * @param {!Context} context
+ * @param {!goog.structs.Map<string, string>} attrsByKey
+ * @param {!amp.validator.ValidationResult} result
+ */
+ParsedTagSpec.prototype.validateLayout = function(context, attrsByKey, result) {
+  goog.asserts.assert(this.spec_.ampLayout != null);
+
+  const layoutAttr = attrsByKey.get('layout');
+  const widthAttr = attrsByKey.get('width');
+  const heightAttr = attrsByKey.get('height');
+  const sizesAttr = attrsByKey.get('sizes');
+
+  // Parse the input layout attributes which we found for this tag.
+  const inputLayout = parseLayout(layoutAttr);
+  if (layoutAttr !== undefined &&
+      inputLayout === amp.validator.AmpLayout.Layout.UNKNOWN) {
+    context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+                     'layout', this.spec_.specUrl, result);
+    return;
+  }
+  const inputWidth = new amp.validator.CssLengthAndUnit(
+      widthAttr, /* allowAuto */ true);
+  if (!inputWidth.isValid) {
+    context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+                     'width', this.spec_.specUrl, result);
+    return;
+  }
+  const inputHeight = new amp.validator.CssLengthAndUnit(
+      heightAttr, /* allowAuto */ false);
+  if (!inputHeight.isValid) {
+    context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+                     'height', this.spec_.specUrl, result);
+    return;
+  }
+
+  // Now calculate the effective layout attributes.
+  const width = CalculateWidth(this.spec_.ampLayout, inputLayout, inputWidth);
+  const height = CalculateHeight(this.spec_.ampLayout, inputLayout,
+                                 inputHeight);
+  const layout = CalculateLayout(inputLayout, width, height, sizesAttr);
+
+  // Does the tag support the computed layout?
+  if (this.spec_.ampLayout.supportedLayouts.indexOf(layout) === -1) {
+    const code = layoutAttr !== undefined ?
+        amp.validator.ValidationError.Code.INVALID_ATTR_VALUE :
+        amp.validator.ValidationError.Code.IMPLIED_LAYOUT_INVALID;
+    context.addError(code, 'layout ' + layout + ' not supported',
+                     this.spec_.specUrl, result);
+    return;
+  }
+  // Check other constraints imposed by the particular layouts.
+  if ((layout === amp.validator.AmpLayout.Layout.FIXED ||
+       layout === amp.validator.AmpLayout.Layout.FIXED_HEIGHT ||
+       layout === amp.validator.AmpLayout.Layout.RESPONSIVE) &&
+      !height.isSet) {
+    context.addError(amp.validator.ValidationError.Code.MANDATORY_ATTR_MISSING,
+                     'height', this.spec_.specUrl, result);
+    return;
+  }
+  if (layout === amp.validator.AmpLayout.Layout.FIXED_HEIGHT &&
+      width.isSet && !width.isAuto) {
+    context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+                     "layout FIXED_HEIGHT requires width='auto'",
+                     this.spec_.specUrl, result);
+    return;
+  }
+  if (layout === amp.validator.AmpLayout.Layout.FIXED ||
+      layout === amp.validator.AmpLayout.Layout.RESPONSIVE) {
+    if (!width.isSet) {
+      context.addError(
+          amp.validator.ValidationError.Code.MANDATORY_ATTR_MISSING,
+          'width', this.spec_.specUrl, result);
+      return;
+    } else if (width.isAuto) {
+      context.addError(
+          amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+          'width=auto', this.spec_.specUrl, result);
+      return;
+    }
+  }
+  if (layout === amp.validator.AmpLayout.Layout.RESPONSIVE &&
+      width.unit !== height.unit) {
+      context.addError(
+          amp.validator.ValidationError.Code.
+              INCONSISTENT_UNITS_FOR_WIDTH_AND_HEIGHT,
+          width.unit + ' != ' + height.unit, this.spec_.specUrl, result);
+      return;
+  }
+};
+
+/**
  * Validates whether the attributes set on |encountered_tag| conform to this
  * tag specification. All mandatory attributes must appear. Only attributes
  * explicitly mentioned by this tag spec may appear.
@@ -1136,6 +1475,18 @@ ParsedTagSpec.prototype.getSpec = function() {
  */
 ParsedTagSpec.prototype.validateAttributes = function(
     context, encounteredAttrs, resultForAttempt) {
+  if (this.spec_.ampLayout !== null) {
+    const attrsByKey = new goog.structs.Map();
+    for (let i = 0; i < encounteredAttrs.length; i += 2) {
+      attrsByKey.set(encounteredAttrs[i], encounteredAttrs[i + 1]);
+    }
+    this.validateLayout(context, attrsByKey, resultForAttempt);
+    if (resultForAttempt.status ===
+        amp.validator.ValidationResult.Status.FAIL) {
+      return;
+    }
+  }
+  const hasTemplateAncestor = context.getTagNames().hasAncestor("template");
   let mandatoryAttrsSeen = [];
   /** @type {!goog.structs.Set<string>} */
   const mandatoryOneofsSeen = new goog.structs.Set();
@@ -1144,6 +1495,7 @@ ParsedTagSpec.prototype.validateAttributes = function(
   for (let i = 0; i < encounteredAttrs.length; i += 2) {
     const encounteredAttrKey = encounteredAttrs[i];
     let encounteredAttrValue = encounteredAttrs[i + 1];
+
     // Our html parser repeats the key as the value if there is no value. We
     // replace the value with an empty string instead in this case.
     if (encounteredAttrKey === encounteredAttrValue)
@@ -1157,23 +1509,54 @@ ParsedTagSpec.prototype.validateAttributes = function(
       // in practice, some type of ad or perhaps other custom elements require
       // particular data attributes.
       // http://www.w3.org/TR/html5/single-page.html#attr-data-*
-      if (goog.string.startsWith(encounteredAttrKey, 'data-'))
+      // http://w3c.github.io/aria-in-html/
+      // However, mostly to avoid confusion, we want to make sure that
+      // nobody tries to make a Mustache template data attribute,
+      // e.g. <div data-{{foo}}>, so we also exclude those characters.
+      if (goog.string.startsWith(encounteredAttrKey, 'data-') &&
+          !goog.string.contains(encounteredAttrKey, '}') &&
+          !goog.string.contains(encounteredAttrKey, '{')) {
         continue;
+      }
 
-      context.addError(amp.validator.ValidationError.Code.DISALLOWED_ATTR,
-                       encounteredAttrName, this.spec_.specUrl,
-                       resultForAttempt);
+      // At this point, it's an error either way, but we try to give a
+      // more specific error in the case of Mustache template characters.
+      if (encounteredAttrName.indexOf('{{') != -1) {
+        context.addError(
+            amp.validator.ValidationError.Code.TEMPLATE_IN_ATTR_NAME,
+            encounteredAttrName, this.templateSpecUrl_, resultForAttempt);
+      } else {
+        context.addError(amp.validator.ValidationError.Code.DISALLOWED_ATTR,
+                         encounteredAttrName, this.spec_.specUrl,
+                         resultForAttempt);
+      }
       return;
     }
+    // Specific checks for attribute values descending from a template tag.
+    if (hasTemplateAncestor) {
+      if (this.valueHasUnescapedTemplateSyntax(encounteredAttrValue)) {
+        context.addError(
+            amp.validator.ValidationError.Code.UNESCAPED_TEMPLATE_IN_ATTR_VALUE,
+            encounteredAttrName + '=' + encounteredAttrValue,
+            this.templateSpecUrl_, resultForAttempt);
+        return;
+      }
+      if (this.valueHasPartialsTemplateSyntax(encounteredAttrValue)) {
+        context.addError(
+            amp.validator.ValidationError.Code.TEMPLATE_PARTIAL_IN_ATTR_VALUE,
+            encounteredAttrName + '=' + encounteredAttrValue,
+            this.templateSpecUrl_, resultForAttempt);
+        return;
+      }
+    }
+
     if (parsedSpec.getSpec().deprecation !== null) {
       context.addError(amp.validator.ValidationError.Code.DEPRECATED_ATTR,
                        encounteredAttrName + ' - ' +
                            parsedSpec.getSpec().deprecation,
                        parsedSpec.getSpec().deprecationUrl,
                        resultForAttempt);
-      // Since the Javascript is always in development mode, deprecation
-      // is an error. So we return.
-      return;
+      // Deprecation is only a warning, so we don't return.
     }
     if (parsedSpec.getSpec().devModeEnabled !== null) {
       context.addError(amp.validator.ValidationError.Code.DEV_MODE_ENABLED,
@@ -1181,38 +1564,51 @@ ParsedTagSpec.prototype.validateAttributes = function(
                            parsedSpec.getSpec().devModeEnabled,
                        parsedSpec.getSpec().devModeEnabledUrl,
                        resultForAttempt);
-      // Since the Javascript is always in development mode, developer mode
-      // enabled is not an error, so no need to return.
+      // Enabling the developer attribute is now always an error, so we
+      // return.
+      return;
     }
-    if (parsedSpec.getSpec().value !== null) {
-      if (encounteredAttrValue != parsedSpec.getSpec().value) {
-        context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
-                         encounteredAttrName + '=' + encounteredAttrValue,
-                         this.spec_.specUrl, resultForAttempt);
-        return;
+    if (!hasTemplateAncestor || 
+        !this.valueHasTemplateSyntax(encounteredAttrValue)) {
+      // The value, value_regex, and value_properties fields are
+      // treated like a oneof, but we're not using oneof because it's
+      // a feature that was added after protobuf 2.5.0 (which our
+      // open-source version uses).
+      // begin oneof {
+      if (parsedSpec.getSpec().value !== null) {
+        if (encounteredAttrValue != parsedSpec.getSpec().value) {
+          context.addError(
+              amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+              encounteredAttrName + '=' + encounteredAttrValue,
+              this.spec_.specUrl, resultForAttempt);
+          return;
+        }
       }
-    }
-    if (parsedSpec.getSpec().valueRegex !== null) {
-      const valueRegex = new RegExp(parsedSpec.getSpec().valueRegex, 'g');
-      if (!valueRegex.test(encounteredAttrValue)) {
-        context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
-                         encounteredAttrName + '=' + encounteredAttrValue,
-                         this.spec_.specUrl, resultForAttempt);
-        return;
+      if (parsedSpec.getSpec().valueRegex !== null) {
+        const valueRegex =
+            new RegExp('^(' + parsedSpec.getSpec().valueRegex + ')$');
+        if (!valueRegex.test(encounteredAttrValue)) {
+          context.addError(
+              amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
+              encounteredAttrName + '=' + encounteredAttrValue,
+              this.spec_.specUrl, resultForAttempt);
+          return;
+        }
       }
-    }
-    if (parsedSpec.getSpec().valueProperties !== null) {
-      parsedSpec.validateAttrValueProperties(
-          context, encounteredAttrName, encounteredAttrValue,
-          this.spec_.specUrl, resultForAttempt);
-      if (resultForAttempt.status ===
-          amp.validator.ValidationResult.Status.FAIL) {
-        return;
+      if (parsedSpec.getSpec().valueProperties !== null) {
+        parsedSpec.validateAttrValueProperties(
+            context, encounteredAttrName, encounteredAttrValue,
+            this.spec_.specUrl, resultForAttempt);
+        if (resultForAttempt.status ===
+            amp.validator.ValidationResult.Status.FAIL) {
+          return;
+        }
       }
+      // } end oneof
     }
     if (parsedSpec.getSpec().blacklistedValueRegex !== null) {
-      const blacklistedValueRegex =
-          new RegExp(parsedSpec.getSpec().blacklistedValueRegex, 'gi');
+      const blacklistedValueRegex = new RegExp(
+          parsedSpec.getSpec().blacklistedValueRegex, 'i');
       if (blacklistedValueRegex.test(encounteredAttrValue)) {
         context.addError(amp.validator.ValidationError.Code.INVALID_ATTR_VALUE,
                          encounteredAttrName + '=' + encounteredAttrValue,
@@ -1223,6 +1619,9 @@ ParsedTagSpec.prototype.validateAttributes = function(
     if (parsedSpec.getSpec().mandatory) {
       mandatoryAttrsSeen.push(parsedSpec.getId());
     }
+    // The "at most 1" part of mandatory_oneof: mandatory_oneof
+    // wants exactly one of the alternatives, so here
+    // we check whether we already saw another alternative
     if (parsedSpec.getSpec().mandatoryOneof &&
         mandatoryOneofsSeen.contains(parsedSpec.getSpec().mandatoryOneof)) {
       context.addError(
@@ -1233,6 +1632,8 @@ ParsedTagSpec.prototype.validateAttributes = function(
     }
     mandatoryOneofsSeen.add(parsedSpec.getSpec().mandatoryOneof);
   }
+  // The "at least 1" part of mandatory_oneof: If none of the
+  // alternatives were present, we report that an attribute is missing.
   for (const mandatoryOneof of this.mandatoryOneofs_) {
     if (!mandatoryOneofsSeen.contains(mandatoryOneof)) {
       context.addError(
@@ -1270,6 +1671,23 @@ ParsedTagSpec.prototype.validateParentTag = function(
   }
 };
 
+/**
+ * Validates if the tag ancestors satisfied the spec.
+ * @param {!Context} context
+ * @param {!amp.validator.ValidationResult} validationResult
+ */
+ParsedTagSpec.prototype.validateDisallowedAncestorTags = function(
+    context, validationResult) {
+  for (const disallowedAncestor of this.spec_.disallowedAncestor) {
+    if (context.getTagNames().hasAncestor(disallowedAncestor)) {
+      context.addError(
+          amp.validator.ValidationError.Code.DISALLOWED_TAG_ANCESTOR,
+          disallowedAncestor + ' > ... > ' + this.spec_.name,
+          this.spec_.specUrl, validationResult);
+      return;
+    }
+  }
+};
 
 /**
  * This wrapper class provides access to the validation rules.
@@ -1304,24 +1722,43 @@ const ParsedValidatorRules = function ParsedValidatorRules() {
     attrListsByName.set(attrList.name, attrList);
   }
 
+  /** @type {!goog.structs.Map<string, number>} */
+  const tagspecIdsByDetail = new goog.structs.Map();
+  /** @type {!goog.structs.Set<string>} */
+  const detailsToTrack = new goog.structs.Set();
   for (let i = 0; i < rules.tags.length; ++i) {
-    const spec = rules.tags[i];
-    const parsedTagSpec = new ParsedTagSpec(spec, i, attrListsByName);
-    this.tagSpecById_.push(parsedTagSpec);
-    goog.asserts.assert(spec.name !== null);
-    if (!this.tagSpecByTagName_.containsKey(spec.name)) {
-      this.tagSpecByTagName_.set(spec.name, []);
+    const tag = rules.tags[i];
+    if (tag.detail != null) {
+      goog.asserts.assert(!tagspecIdsByDetail.containsKey(tag.detail));
+      tagspecIdsByDetail.set(tag.detail, i);
+      for (const alsoRequires of tag.alsoRequires) {
+        detailsToTrack.add(alsoRequires);
+      }
     }
-    this.tagSpecByTagName_.get(spec.name).push(parsedTagSpec);
-    if (spec.mandatory)
+  }
+
+  for (let i = 0; i < rules.tags.length; ++i) {
+    const tag = rules.tags[i];
+    goog.asserts.assert(rules.templateSpecUrl != null);
+    const parsedTagSpec = new ParsedTagSpec(
+        rules.templateSpecUrl, attrListsByName, tagspecIdsByDetail,
+        shouldRecordTagspecValidated(tag, detailsToTrack), tag, i);
+    this.tagSpecById_.push(parsedTagSpec);
+    goog.asserts.assert(tag.name !== null);
+    if (!this.tagSpecByTagName_.containsKey(tag.name)) {
+      this.tagSpecByTagName_.set(tag.name, []);
+    }
+    this.tagSpecByTagName_.get(tag.name).push(parsedTagSpec);
+    if (tag.mandatory)
       this.mandatoryTagSpecs_.push(i);
   }
 };
 
 /**
- * Validates the provided |tagName| with respect to the tag specications
- * that are part of this instance. At least one specification must validate.
- * The ids for mandatory tag specs are emitted into |mandatory_tags_validated|.
+ * Validates the provided |tagName| with respect to the tag
+ * specifications that are part of this instance. At least one
+ * specification must validate. The ids for mandatory tag specs are
+ * emitted via context.recordTagspecValidated().
  * @param {!Context} context
  * @param {string} tagName
  * @param {!Array<string>} encounteredAttrs Alternating key/value pain the array
@@ -1332,7 +1769,7 @@ ParsedValidatorRules.prototype.validateTag = function(
   const allTagSpecs = this.tagSpecByTagName_.get(tagName);
   if (allTagSpecs === undefined) {
     context.addError(amp.validator.ValidationError.Code.DISALLOWED_TAG,
-                     tagName, /*specUrl=*/ '', validationResult);
+                     tagName, /* specUrl */ '', validationResult);
     return;
   }
   let resultForBestAttempt = new amp.validator.ValidationResult();
@@ -1346,31 +1783,30 @@ ParsedValidatorRules.prototype.validateTag = function(
     parsedSpec.validateAttributes(
         context, encounteredAttrs, resultForAttempt);
     parsedSpec.validateParentTag(context, resultForAttempt);
-    if (resultForAttempt.status !==
-        amp.validator.ValidationResult.Status.FAIL &&
-        parsedSpec.getSpec().unique) {
-      // If a duplicate tag is encountered for a spec that's supposed
-      // to be unique, we've found an error that we must report.
-      if (!context.recordUniqueTagspecValidated(parsedSpec.getId())) {
-        const spec = parsedSpec.getSpec();
-        context.addError(
-            amp.validator.ValidationError.Code.DUPLICATE_UNIQUE_TAG,
-            getDetailOrName(spec), spec.specUrl, validationResult);
-        return;
-      }
-    }
+    parsedSpec.validateDisallowedAncestorTags(context, resultForAttempt);
 
     if (resultForAttempt.status !==
         amp.validator.ValidationResult.Status.FAIL) {
       // This is the successful branch of the code: thus far everything
       // went fine.
 
+      if (parsedSpec.shouldRecordTagspecValidated()) {
+        const isUnique = context.recordTagspecValidated(parsedSpec.getId());
+        // If a duplicate tag is encountered for a spec that's supposed
+        // to be unique, we've found an error that we must report.
+        if (parsedSpec.getSpec().unique && !isUnique) {
+          const spec = parsedSpec.getSpec();
+          context.addError(
+              amp.validator.ValidationError.Code.DUPLICATE_UNIQUE_TAG,
+              getDetailOrName(spec), spec.specUrl, validationResult);
+          return;
+        }
+      }
+
       // However we still want to merge the "errors" because warnings should
-      // be reported as well (e.g., the development mode warning).
+      // be reported as well (e.g., the deprecation warnings).
       validationResult.mergeFrom(resultForAttempt);
 
-      if (parsedSpec.getSpec().mandatory)
-        context.recordValidatedMandatoryTagSpec(parsedSpec.getId());
       if (parsedSpec.getSpec().mandatoryAlternatives !== null)
         context.recordMandatoryAlternativeSatisfied(
             parsedSpec.getSpec().mandatoryAlternatives);
@@ -1387,23 +1823,59 @@ ParsedValidatorRules.prototype.validateTag = function(
 };
 
 /**
- * Emits any validation errors due to missing mandatory tags.
+ * Emits errors for tags that are specified to be mandatory.
  * @param {!Context} context
  * @param {!amp.validator.ValidationResult} validationResult
  */
-ParsedValidatorRules.prototype.maybeEmitMandatoryTagValidationErrors = function(
-    context, validationResult) {
-  if (context.getProgress(validationResult).complete)
-    return;
-  const mandatoryTagSpecsValidated = context.mandatoryTagSpecsValidated();
-  if (!goog.array.equals(mandatoryTagSpecsValidated, this.mandatoryTagSpecs_)) {
-    const diffs = subtractDiff(this.mandatoryTagSpecs_, mandatoryTagSpecsValidated);
-    for (const diff of diffs) {
-      const spec = this.tagSpecById_[diff].getSpec();
-      context.addError(amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING,
-                       getDetailOrName(spec), spec.specUrl, validationResult);
+ParsedValidatorRules.prototype.maybeEmitMandatoryTagValidationErrors =
+    function(context, validationResult) {
+  for (const tagspecId of this.mandatoryTagSpecs_) {
+    if (!context.getTagspecsValidated().contains(tagspecId)) {
+      const spec = this.tagSpecById_[tagspecId].getSpec();
+      if (!context.addError(
+          amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING,
+          getDetailOrName(spec), spec.specUrl, validationResult)) {
+        return;
+      }
     }
   }
+};
+
+/**
+ * Emits errors for tags that specify that another tag is also required.
+ * Returns false iff context->Progress(result).complete.
+ * @param {!Context} context
+ * @param {!amp.validator.ValidationResult} validationResult
+ */
+ParsedValidatorRules.prototype.maybeEmitAlsoRequiresValidationErrors =
+    function(context, validationResult) {
+  let tagspecsValidated = context.getTagspecsValidated().getValues();
+  goog.array.sort(tagspecsValidated);
+  for (const tagspecId of tagspecsValidated) {
+    const spec = this.tagSpecById_[tagspecId];
+    for (const alsoRequiresTagspecId of spec.getAlsoRequires()) {
+      if (!context.getTagspecsValidated().contains(alsoRequiresTagspecId)) {
+        const alsoRequiresSpec = this.tagSpecById_[alsoRequiresTagspecId];
+        if (!context.addError(
+            amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING,
+            getDetailOrName(alsoRequiresSpec.getSpec()) + ' required by ' +
+            getDetailOrName(spec.getSpec()), spec.getSpec().specUrl,
+            validationResult)) {
+          return;
+        }
+      }
+    }
+  }
+};
+
+/**
+ * Emits errors for tags that are specified as mandatory alternatives.
+ * Returns false iff context->Progress(result).complete.
+ * @param {!Context} context
+ * @param {!amp.validator.ValidationResult} validationResult
+ */
+ParsedValidatorRules.prototype.maybeEmitMandatoryAlternativesSatisfiedErrors =
+    function(context, validationResult) {
   const satisfied = context.getMandatoryAlternativesSatisfied();
   /** @type {!Array<string>} */
   let missing = [];
@@ -1414,15 +1886,37 @@ ParsedValidatorRules.prototype.maybeEmitMandatoryTagValidationErrors = function(
       const alternative = spec.mandatoryAlternatives;
       if (!satisfied.contains(alternative)) {
         missing.push(alternative);
-        specUrlsByMissing[missing] = spec.specUrl;
+        specUrlsByMissing[alternative] = spec.specUrl;
       }
     }
   }
   for (const tagMissing of sortAndUniquify(missing)) {
-    context.addError(amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING,
-                     tagMissing, /*specUrl=*/ specUrlsByMissing[tagMissing],
-                     validationResult);
+    if (!context.addError(
+        amp.validator.ValidationError.Code.MANDATORY_TAG_MISSING,
+        tagMissing, /* specUrl */ specUrlsByMissing[tagMissing],
+        validationResult)) {
+      return;
+    }
   }
+};
+
+/**
+ * Emits any validation errors which require a global view
+ * (mandatory tags, tags required by other tags, mandatory alternatives).
+ * @param {!Context} context
+ * @param {!amp.validator.ValidationResult} validationResult
+ */
+ParsedValidatorRules.prototype.maybeEmitGlobalTagValidationErrors = function(
+    context, validationResult) {
+  if (context.getProgress(validationResult).complete)
+    return;
+  this.maybeEmitMandatoryTagValidationErrors(context, validationResult);
+  if (context.getProgress(validationResult).complete)
+    return;
+  this.maybeEmitAlsoRequiresValidationErrors(context, validationResult);
+  if (context.getProgress(validationResult).complete)
+    return;
+  this.maybeEmitMandatoryAlternativesSatisfiedErrors(context, validationResult);
 };
 
 /**
@@ -1458,7 +1952,7 @@ const ValidationHandler = function ValidationHandler() {
    * @type {!Context}
    * @private
    */
-  this.context_ = new Context(/*maxErrors=*/-1);
+  this.context_ = new Context(/* maxErrors */-1);
   /**
    * Rules from parsed JSON configuration.
    * @type {!ParsedValidatorRules}
@@ -1511,7 +2005,7 @@ ValidationHandler.prototype.endDoc = function() {
   if (this.context_.getProgress(this.validationResult_).complete)
     return;
   this.context_.setCdataMatcher(new CdataMatcher(new amp.validator.TagSpec()));
-  this.rules_.maybeEmitMandatoryTagValidationErrors(
+  this.rules_.maybeEmitGlobalTagValidationErrors(
       this.context_, this.validationResult_);
   if (this.validationResult_.status ===
       amp.validator.ValidationResult.Status.UNKNOWN)

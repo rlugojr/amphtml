@@ -15,13 +15,10 @@
  */
 
 import './polyfills';
-
-import {historyFor} from './history';
 import {installPullToRefreshBlocker} from './pull-to-refresh';
 import {performanceFor} from './performance';
-import {viewerFor} from './viewer';
-import {vsyncFor} from './vsync';
-
+import {templatesFor} from './template';
+import {installCoreServices} from './amp-core-service';
 import {installAd} from '../builtins/amp-ad';
 import {installGlobalClickListener} from './document-click';
 import {installImg} from '../builtins/amp-img';
@@ -31,8 +28,7 @@ import {installStyles, makeBodyVisible} from './styles';
 import {installErrorReporting} from './error';
 import {stubElements} from './custom-element';
 import {adopt} from './runtime';
-import {cssText} from '../build/css.js';
-import {action} from './action';
+import {cssText} from '../build/css';
 import {maybeValidate} from './validator-integration';
 
 // We must under all circumstances call makeBodyVisible.
@@ -46,9 +42,8 @@ try {
   perf.tick('is');
   installStyles(document, cssText, () => {
     try {
-      historyFor(window);
-      viewerFor(window);
-      vsyncFor(window);
+      installCoreServices(window);
+      templatesFor(window);
 
       installImg(window);
       installAd(window);
@@ -57,7 +52,6 @@ try {
 
       adopt(window);
       stubElements(window);
-      action.addEvent('tap');
 
       installPullToRefreshBlocker(window);
       installGlobalClickListener(window);

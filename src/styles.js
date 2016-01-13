@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {setStyles} from './style';
 
 /**
  * Adds the given css text to the given document.
@@ -32,7 +33,6 @@
  *     after.
  */
 export function installStyles(doc, cssText, cb, opt_isRuntimeCss) {
-  const length = doc.styleSheets.length;
   const style = doc.createElement('style');
   style.textContent = cssText;
   let afterElement = null;
@@ -82,7 +82,11 @@ export function makeBodyVisible(doc) {
   let interval;
   const set = () => {
     if (doc.body) {
-      doc.body.style.opacity = 1;
+      setStyles(doc.body, {
+        opacity: 1,
+        visibility: 'visible',
+        animation: 'none'
+      });
       clearInterval(interval);
     }
   };

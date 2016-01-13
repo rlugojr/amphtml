@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-var argv = require('minimist')(process.argv.slice(2));
 var autoprefixer = require('autoprefixer');
 var babel = require('babelify');
 var browserify = require('browserify');
@@ -25,6 +24,7 @@ var fs = require('fs-extra');
 var gulp = require('gulp-help')(require('gulp'));
 var gulpWatch = require('gulp-watch');
 var lazypipe = require('lazypipe');
+var minimist = require('minimist');
 var postcss = require('postcss');
 var rename = require('gulp-rename');
 var replace = require('gulp-replace');
@@ -35,6 +35,9 @@ var util = require('gulp-util');
 var watchify = require('watchify');
 var wrap = require('gulp-wrap');
 var internalRuntimeVersion = require('./build-system/internal-version').VERSION;
+
+var argv = minimist(process.argv.slice(2), { boolean: ['strictBabelTransform'] });
+
 require('./build-system/tasks');
 
 // NOTE: see https://github.com/ai/browserslist#queries for `browsers` list
@@ -65,9 +68,13 @@ function buildExtensions(options) {
   // We pass watch further in to have browserify watch the built file
   // and update it if any of its required deps changed.
   // Each extension and version must be listed individually here.
+  buildExtension('amp-access', '0.1', true, options);
+  buildExtension('amp-analytics', '0.1', false, options);
   buildExtension('amp-anim', '0.1', false, options);
   buildExtension('amp-audio', '0.1', false, options);
+  buildExtension('amp-brightcove', '0.1', false, options);
   buildExtension('amp-carousel', '0.1', true, options);
+  buildExtension('amp-dynamic-css-classes', '0.1', false, options);
   buildExtension('amp-fit-text', '0.1', true, options);
   buildExtension('amp-font', '0.1', false, options);
   buildExtension('amp-iframe', '0.1', false, options);
@@ -84,6 +91,8 @@ function buildExtensions(options) {
    */
   buildExtension('amp-slides', '0.1', false, options);
   buildExtension('amp-twitter', '0.1', false, options);
+  buildExtension('amp-user-notification', '0.1', true, options);
+  buildExtension('amp-vine', '0.1', false, options);
   buildExtension('amp-youtube', '0.1', false, options);
 }
 
@@ -104,7 +113,10 @@ function polyfillsForTests() {
  */
 function compile(watch, shouldMinify) {
   compileCss();
-  compileJs('./src/', 'amp.js', './dist', {
+  // For compilation with babel we start with the amp-babel entry point,
+  // but then rename to the amp.js which we've been using all along.
+  compileJs('./src/', 'amp-babel.js', './dist', {
+    toName: 'amp.js',
     minifiedName: 'v0.js',
     watch: watch,
     minify: shouldMinify,
@@ -268,6 +280,7 @@ function dist() {
   compile(false, true);
   buildExtensions({minify: true});
   buildExperiments({minify: true, watch: false});
+  buildLoginDone({minify: true, watch: false});
 }
 
 /**
@@ -291,7 +304,9 @@ function buildExamples(watch) {
 
   // Also update test-example-validation.js
   buildExample('ads.amp.html');
+  buildExample('analytics.amp.html');
   buildExample('article.amp.html');
+  buildExample('article-access.amp.html');
   buildExample('metadata-examples/article-json-ld.amp.html');
   buildExample('metadata-examples/article-microdata.amp.html');
   buildExample('metadata-examples/recipe-json-ld.amp.html');
@@ -303,8 +318,16 @@ function buildExamples(watch) {
   buildExample('everything.amp.html');
   buildExample('font.amp.html');
   buildExample('instagram.amp.html');
+  buildExample('pinterest.amp.html');
   buildExample('released.amp.html');
   buildExample('twitter.amp.html');
+  buildExample('user-notification.amp.html');
+  buildExample('vine.amp.html');
+
+  // TODO(dvoytenko, #1393): Enable for proxy-testing.
+  // // Examples are also copied into `c/` directory for AMP-proxy testing.
+  // fs.copy('examples.build/', 'c/', {clobber: true},
+  //     copyHandler.bind(null, 'examples.build to c folder'));
 
   function copyHandler(name, err) {
     if (err) {
@@ -387,7 +410,7 @@ function thirdPartyBootstrap(watch, shouldMinify) {
 function compileJs(srcDir, srcFilename, destDir, options) {
   options = options || {};
   var bundler = browserify(srcDir + srcFilename, {debug: true})
-      .transform(babel);
+      .transform(babel, { loose: argv.strictBabelTransform ? undefined : 'all' });
   if (options.watch) {
     bundler = watchify(bundler);
   }
@@ -409,6 +432,7 @@ function compileJs(srcDir, srcFilename, destDir, options) {
     bundler.bundle()
       .on('error', function(err) { console.error(err); this.emit('end'); })
       .pipe(lazybuild())
+      .pipe(rename(options.toName || srcFilename))
       .pipe(lazywrite());
   }
 
@@ -509,6 +533,93 @@ function buildExperiments(options) {
 
 
 /**
+ * Build "Login Done" page.
+ *
+ * @param {!Object} options
+ */
+function buildLoginDone(options) {
+  return buildLoginDoneVersion('0.1', options);
+}
+
+/**
+ * Build "Login Done" page for the specified version.
+ *
+ * @param {!Object} options
+ */
+function buildLoginDoneVersion(version, options) {
+  options = options || {};
+  console.log('Bundling amp-login-done.html/js');
+
+  function copyHandler(name, err) {
+    if (err) {
+      return util.log(util.colors.red('copy error: ', err));
+    }
+    util.log(util.colors.green('copied ' + name));
+  }
+
+  var path = 'extensions/amp-access/' + version + '/';
+  var htmlPath = path + 'amp-login-done.html';
+  var jsPath = path + 'amp-login-done.js';
+  var watch = options.watch;
+  if (watch === undefined) {
+    watch = argv.watch || argv.w;
+  }
+
+  // Building extensions is a 2 step process because of the renaming
+  // and CSS inlining. This watcher watches the original file, copies
+  // it to the destination and adds the CSS.
+  if (watch) {
+    // Do not set watchers again when we get called by the watcher.
+    var copy = Object.create(options);
+    copy.watch = false;
+    gulpWatch(path + '/*', function() {
+      buildLoginDoneVersion(version, copy);
+    });
+  }
+
+  // Build HTML.
+  console.log('Processing ' + htmlPath);
+  var html = fs.readFileSync(htmlPath, 'utf8');
+  var minHtml = html.replace(
+      '../../../dist/v0/amp-login-done-' + version + '.max.js',
+      'https://cdn.ampproject.org/v0/amp-login-done-' + version + '.js');
+
+  function mkdirSync(path) {
+    try {
+      fs.mkdirSync(path);
+    } catch(e) {
+      if (e.code != 'EEXIST') {
+        throw e;
+      }
+    }
+  }
+
+  mkdirSync('dist');
+  mkdirSync('dist/v0');
+
+  fs.writeFileSync('dist/v0/amp-login-done-' + version + '.html',
+      minHtml);
+
+  // Build JS.
+  var js = fs.readFileSync(jsPath, 'utf8');
+  var builtName = 'amp-login-done-' + version + '.max.js';
+  var minifiedName = 'amp-login-done-' + version + '.js';
+  var latestName = 'amp-login-done-latest.js';
+  return gulp.src(path + '/*.js')
+      .pipe(file(builtName, js))
+      .pipe(gulp.dest('build/all/v0/'))
+      .on('end', function() {
+        compileJs('build/all/v0/', builtName, 'dist/v0/', {
+          watch: false,
+          minify: options.minify || argv.minify,
+          minifiedName: minifiedName,
+          latestName: latestName,
+        });
+      });
+}
+
+
+/**
  * Gulp tasks
  */
 gulp.task('build', 'Builds the AMP library', build);
@@ -518,3 +629,4 @@ gulp.task('dist', 'Build production binaries', dist);
 gulp.task('extensions', 'Build AMP Extensions', buildExtensions);
 gulp.task('watch', 'Watches for changes in files, re-build', watch);
 gulp.task('build-experiments', 'Builds experiments.html/js', buildExperiments);
+gulp.task('build-login-done', 'Builds login-done.html/js', buildLoginDone);

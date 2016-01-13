@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import {childElementByAttr} from '../../../src/dom';
 import {getLengthNumeral, isLayoutSizeDefined} from '../../../src/layout';
+import {getMode} from '../../../src/mode';
 import {loadPromise} from '../../../src/event-helper';
 import {log} from '../../../src/log';
 import {parseUrl} from '../../../src/url';
+import {removeElement} from '../../../src/dom';
 
 /** @const {string} */
 const TAG_ = 'AmpIframe';
@@ -29,7 +30,7 @@ let count = 0;
 /** @const */
 const assert = AMP.assert;
 
-class AmpIframe extends AMP.BaseElement {
+export class AmpIframe extends AMP.BaseElement {
   /** @override */
   isLayoutSupported(layout) {
     return isLayoutSizeDefined(layout);
@@ -45,8 +46,8 @@ class AmpIframe extends AMP.BaseElement {
         this.element);
     const containerUrl = parseUrl(containerSrc);
     assert(
-        !((' ' + sandbox + ' ').match(/\s+allow-same-origin\s+/)) ||
-        url.origin != containerUrl.origin,
+        !((' ' + sandbox + ' ').match(/\s+allow-same-origin\s+/i)) ||
+        (url.origin != containerUrl.origin && url.protocol != 'data:'),
         'Origin of <amp-iframe> must not be equal to container %s' +
         'if allow-same-origin is set.',
         this.element);
@@ -74,16 +75,16 @@ class AmpIframe extends AMP.BaseElement {
    * instead ensure that `allow-same-origin` is not present, but this
    * implementation has the right security behavior which is that the document
    * may under no circumstances be able to run JS on the parent.
+   * @param {string} srcdoc
+   * @param {string} sandbox
    * @return {string} Data URI for the srcdoc
    */
-  transformSrcDoc() {
-    const srcdoc = this.element.getAttribute('srcdoc');
+  transformSrcDoc(srcdoc, sandbox) {
     if (!srcdoc) {
       return;
     }
-    const sandbox = this.element.getAttribute('sandbox');
     assert(
-        !((' ' + sandbox + ' ').match(/\s+allow-same-origin\s+/)),
+        !((' ' + sandbox + ' ').match(/\s+allow-same-origin\s+/i)),
         'allow-same-origin is not allowed with the srcdoc attribute %s.',
         this.element);
     return 'data:text/html;charset=utf-8;base64,' + btoa(srcdoc);
@@ -91,10 +92,14 @@ class AmpIframe extends AMP.BaseElement {
 
   /** @override */
   firstAttachedCallback() {
-    const iframeSrc = this.element.getAttribute('src') ||
-        this.transformSrcDoc();
-    this.iframeSrc = this.assertSource(iframeSrc, window.location.href,
-        this.element.getAttribute('sandbox'));
+    /** @private @const {string} */
+    this.sandbox_ = this.element.getAttribute('sandbox');
+    const iframeSrc =
+        this.element.getAttribute('src') ||
+        this.transformSrcDoc(
+            this.element.getAttribute('srcdoc'), this.sandbox_);
+    this.iframeSrc = this.assertSource(
+        iframeSrc, window.location.href, this.sandbox_);
   }
 
   /** @override */
@@ -106,11 +111,17 @@ class AmpIframe extends AMP.BaseElement {
 
   /** @override */
   buildCallback() {
+    /** @private @const {!Element} */
+    this.placeholder_ = this.getPlaceholder();
+    /** @private @const {boolean} */
+    this.isClickToPlay_ = !!this.placeholder_;
   }
 
   /** @override */
   layoutCallback() {
-    this.assertPosition();
+    if (!this.isClickToPlay_) {
+      this.assertPosition();
+    }
     if (!this.iframeSrc) {
       // This failed already, lets not signal another error.
       return Promise.resolve();
@@ -127,10 +138,10 @@ class AmpIframe extends AMP.BaseElement {
     iframe.width = getLengthNumeral(width);
     iframe.height = getLengthNumeral(height);
     iframe.name = 'amp_iframe' + count++;
-    iframe.onload = function() {
-      // Chrome does not reflect the iframe readystate.
-      this.readyState = 'complete';
-    };
+
+    if (this.isClickToPlay_) {
+      iframe.style.zIndex = -1;
+    }
 
     /** @private @const {boolean} */
     this.isResizable_ = this.element.hasAttribute('resizable');
@@ -145,9 +156,15 @@ class AmpIframe extends AMP.BaseElement {
     this.propagateAttributes(
         ['frameborder', 'allowfullscreen', 'allowtransparency', 'scrolling'],
         iframe);
-    setSandbox(this.element, iframe);
+    setSandbox(this.element, iframe, this.sandbox_);
     iframe.src = this.iframeSrc;
     this.element.appendChild(makeIOsScrollable(this.element, iframe));
+
+    iframe.onload = () => {
+      // Chrome does not reflect the iframe readystate.
+      iframe.readyState = 'complete';
+      this.activateIframe_();
+    };
 
     listen(iframe, 'embed-size', data => {
       if (data.width !== undefined) {
@@ -162,7 +179,24 @@ class AmpIframe extends AMP.BaseElement {
         this.updateHeight_(newHeight);
       }
     });
+    if (this.isClickToPlay_) {
+      listen(iframe, 'embed-ready', this.activateIframe_.bind(this));
+    }
     return loadPromise(iframe);
+  }
+
+  /**
+   * Makes the iframe visible.
+   * @private
+   */
+  activateIframe_() {
+    this.getVsync().mutate(() => {
+      if (this.placeholder_) {
+        this.iframe_.style.zIndex = '';
+        removeElement(this.placeholder_);
+        this.placeholder_ = null;
+      }
+    });
   }
 
   /**
@@ -177,7 +211,7 @@ class AmpIframe extends AMP.BaseElement {
           this.element);
       return;
     }
-    this.requestChangeHeight(newHeight);
+    this.attemptChangeHeight(newHeight);
   }
 };
 
@@ -186,9 +220,10 @@ class AmpIframe extends AMP.BaseElement {
  * to be opted in are allowed.
  * @param {!Element} element
  * @param {!Element} iframe
+ * @param {string} sandbox
  */
-function setSandbox(element, iframe) {
-  const allows = element.getAttribute('sandbox') || '';
+function setSandbox(element, iframe, sandbox) {
+  const allows = sandbox || '';
   iframe.setAttribute('sandbox', allows);
 }
 
@@ -219,8 +254,9 @@ function listen(iframe, typeOfMessage, callback) {
   assert(iframe.src, 'only iframes with src supported');
   const origin = parseUrl(iframe.src).origin;
   const win = iframe.ownerDocument.defaultView;
+  const mode = getMode();
   win.addEventListener('message', function(event) {
-    if (event.origin != origin) {
+    if (event.origin != origin && !mode.localDev && !mode.test) {
       return;
     }
     if (event.source != iframe.contentWindow) {

@@ -18,82 +18,18 @@ import {BaseElement} from '../src/base-element';
 import {assert} from '../src/asserts';
 import {getIntersectionChangeEntry} from '../src/intersection-observer';
 import {isLayoutSizeDefined} from '../src/layout';
-import {setStyles} from '../src/style';
 import {loadPromise} from '../src/event-helper';
 import {registerElement} from '../src/custom-element';
-import {getIframe, listenOnce, postMessage, prefetchBootstrap} from
+import {getIframe, listen, listenOnce, postMessage, prefetchBootstrap} from
     '../src/3p-frame';
 import {adPrefetch, adPreconnect} from '../ads/_prefetch';
 import {timer} from '../src/timer';
-import {vsyncFor} from '../src/vsync';
 
-
-/**
- * Preview phase only default backfill for ads. If the ad
- * cannot fill the slot one of these will be displayed instead.
- * @private @const
- */
-const BACKFILL_IMGS_ = {
-  '300x200': [
-    'backfill-1@1x.png',
-    'backfill-2@1x.png',
-    'backfill-3@1x.png',
-    'backfill-4@1x.png',
-    'backfill-5@1x.png',
-  ],
-  '320x50': [
-    'backfill-6@1x.png',
-    'backfill-7@1x.png',
-  ],
-};
-
-/** @private @const */
-const BACKFILL_DIMENSIONS_ = [
-  [300, 200],
-  [320, 50],
-];
 
 /** @private @const These tags are allowed to have fixed positioning */
 const POSITION_FIXED_TAG_WHITELIST = {
   'AMP-LIGHTBOX': true
 };
-
-/**
- * Preview phase helper to score images through their dimensions.
- * @param {!Array<!Array<number>>} dims
- * @param {number} maxWidth
- * @param {number} maxHeight
- * visibleForTesting
- */
-export function scoreDimensions_(dims, maxWidth, maxHeight) {
-  return dims.map(function(dim) {
-    const width = dim[0];
-    const height = dim[1];
-    const widthScore = Math.abs(width - maxWidth);
-    // if the width is over the max then we need to penalize it
-    const widthPenalty = Math.abs((maxWidth - width) * 3);
-    // we add a multiplier to height as we prioritize it more than width
-    const heightScore = Math.abs(height - maxHeight) * 2;
-    // if the height is over the max then we need to penalize it
-    const heightPenalty = Math.abs((maxHeight - height) * 2.5);
-
-    return (widthScore - widthPenalty) + (heightScore - heightPenalty);
-  });
-}
-
-/**
- * Preview phase helper to update a @1x.png string to @2x.png.
- * @param {!Object<string, !Array<string>>} images
- * visibleForTesting
- */
-export function upgradeImages_(images) {
-  Object.keys(images).forEach(key => {
-    const curDimImgs = images[key];
-    curDimImgs.forEach((item, index) => {
-      curDimImgs[index] = item.replace(/@1x\.png$/, '@2x.png');
-    });
-  });
-}
 
 
 /**
@@ -156,9 +92,6 @@ export function installAd(win) {
       this.fallback_ = this.getFallback();
 
       /** @private {boolean} */
-      this.isDefaultFallback_ = false;
-
-      /** @private {boolean} */
       this.isInFixedContainer_ = false;
 
       /**
@@ -177,14 +110,6 @@ export function installAd(win) {
 
       /** @private {boolean} */
       this.shouldSendIntersectionChanges_ = false;
-
-      if (!this.fallback_) {
-        this.isDefaultFallback_ = true;
-
-        if (this.getDpr() >= 0.5) {
-          upgradeImages_(BACKFILL_IMGS_);
-        }
-      }
     }
 
     /**
@@ -228,6 +153,10 @@ export function installAd(win) {
       // We remeasured this tag, lets also remeasure the iframe. Should be
       // free now and it might have changed.
       this.measureIframeLayoutBox_();
+      // When the framework has the need to remeasure us, our position might
+      // have changed. Send an intersection record if needed. This does nothing
+      // if we aren't currently in view.
+      this.sendAdIntersection_();
     }
 
     /**
@@ -284,10 +213,20 @@ export function installAd(win) {
 
         // Triggered by context.noContentAvailable() inside the ad iframe.
         listenOnce(this.iframe_, 'no-content', () => {
-          this.deferMutate(this.noContentHandler_.bind(this));
+          this.noContentHandler_();
+        });
+        // Triggered by context.reportRenderedEntityIdentifier(…) inside the ad
+        // iframe.
+        listenOnce(this.iframe_, 'entity-id', info => {
+          this.element.setAttribute('creative-id', info.id);
         });
         // Triggered by context.observeIntersection(…) inside the ad iframe.
-        listenOnce(this.iframe_, 'send-intersections', () => {
+        // We use listen instead of listenOnce, because a single ad might
+        // have multiple parties wanting to receive viewability data.
+        // The second time this is called, it doesn't do much but it
+        // guarantees that the receiver gets an initial intersection change
+        // record.
+        listen(this.iframe_, 'send-intersections', () => {
           this.startSendingIntersectionChanges_();
         });
       }
@@ -301,8 +240,15 @@ export function installAd(win) {
       // And update the ad about its position in the viewport while
       // it is visible.
       if (inViewport) {
-        this.unlistenViewportChanges_ =
-            this.getViewport().onChanged(this.sendAdIntersection_.bind(this));
+        const send = this.sendAdIntersection_.bind(this);
+        // Scroll events.
+        const unlistenScroll = this.getViewport().onScroll(send);
+        // Throttled scroll events. Also fires for resize events.
+        const unlistenChanged = this.getViewport().onChanged(send);
+        this.unlistenViewportChanges_ = () => {
+          unlistenScroll();
+          unlistenChanged();
+        };
       } else if (this.unlistenViewportChanges_) {
         this.unlistenViewportChanges_();
         this.unlistenViewportChanges_ = null;
@@ -314,6 +260,8 @@ export function installAd(win) {
      * observing its position in the viewport.
      * Sets a flag, measures the iframe position if necessary and sends
      * one change record to the iframe.
+     * Note that this method may be called more than once if a single ad
+     * has multiple parties interested in viewability data.
      * @private
      */
     startSendingIntersectionChanges_() {
@@ -351,56 +299,20 @@ export function installAd(win) {
      * @private
      */
     noContentHandler_() {
-      if (this.isDefaultFallback_) {
-        this.setDefaultFallback_();
-        this.element.appendChild(this.fallback_);
+      // If a fallback does not exist attempt to collapse the ad.
+      if (!this.fallback_) {
+        this.attemptChangeHeight(0, () => {
+          this.element.style.display = 'none';
+        });
       }
-      this.element.removeChild(this.iframe_);
-      this.toggleFallback(true);
-    }
-
-    /**
-     * This is a preview-phase only thing where if the ad says that it
-     * cannot fill the slot we select from a small set of default
-     * banners.
-     * @private
-     * visibleForTesting
-     */
-    setDefaultFallback_() {
-      const a = document.createElement('a');
-      a.href = 'https://www.ampproject.org';
-      a.target = '_blank';
-      a.setAttribute('fallback', '');
-      const img = new Image();
-      setStyles(img, {
-        width: 'auto',
-        height: '100%',
-        margin: 'auto',
+      this.deferMutate(() => {
+        if (this.fallback_) {
+          this.toggleFallback(true);
+        }
+        this.element.removeChild(this.iframe_);
       });
-
-      const winner = this.getFallbackImage_();
-      img.src = `https://ampproject.org/backfill/${winner}`;
-      this.fallback_ = a;
-      a.appendChild(img);
     }
-
-    /**
-     * Picks a random backfill image for the case that no real ad can be
-     * shown.
-     * @private
-     * @return {string} The image URL.
-     */
-    getFallbackImage_() {
-      const scores = scoreDimensions_(BACKFILL_DIMENSIONS_,
-          this.element./*REVIEW*/clientWidth,
-          this.element./*REVIEW*/clientHeight);
-      const dims = BACKFILL_DIMENSIONS_[
-          scores.indexOf(Math.max.apply(Math, scores))];
-      const images = BACKFILL_IMGS_[dims.join('x')];
-      // do we need a more sophisticated randomizer?
-      return images[Math.floor(Math.random() * images.length)];
-    }
-  };
+  }
 
   registerElement(win, 'amp-ad', AmpAd);
 }

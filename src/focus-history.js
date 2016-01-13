@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {Observable} from './observable';
 import {timer} from './timer';
 
 
@@ -36,6 +37,9 @@ export class FocusHistory {
     /** @private @const {!Array<!{el: !Element, time: time}>} */
     this.history_ = [];
 
+    /** @private @const {!Observable<!Element>} */
+    this.observeFocus_ = new Observable();
+
     /** @private @const {function(!Event)} */
     this.captureFocus_ = e => {
       if (e.target) {
@@ -43,7 +47,7 @@ export class FocusHistory {
       }
     };
     /** @private @const {function(!Event)} */
-    this.captureBlur_ = e => {
+    this.captureBlur_ = unusedE => {
       // IFrame elements do not receive `focus` event. An alternative way is
       // implemented here. We wait for a blur to arrive on the main window
       // and after a short time check which element is active.
@@ -62,6 +66,15 @@ export class FocusHistory {
   }
 
   /**
+   * Add a listener for focus events.
+   * @param {function(!Element)} handler
+   * @return {!UnlistenDef}
+   */
+  onFocus(handler) {
+    return this.observeFocus_.add(handler);
+  }
+
+  /**
    * @param {!Element} element
    * @private
    */
@@ -74,6 +87,7 @@ export class FocusHistory {
       this.history_[this.history_.length - 1].time = now;
     }
     this.purgeBefore(now - this.purgeTimeout_);
+    this.observeFocus_.fire(element);
   }
 
   /**

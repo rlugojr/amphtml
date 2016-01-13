@@ -14,11 +14,17 @@
  * limitations under the License.
  */
 
-import {assert} from './asserts';
+import {cidFor} from './cid';
 import {documentInfoFor} from './document-info';
 import {getService} from './service';
+import {userNotificationManagerFor} from './user-notification';
+import {log} from './log';
 import {parseUrl, removeFragment} from './url';
+import {viewportFor} from './viewport';
+import {vsyncFor} from './vsync';
 
+/** @private {string} */
+const TAG_ = 'UrlReplacements';
 
 /**
  * This class replaces substitution variables with their values.
@@ -82,7 +88,61 @@ class UrlReplacements {
     // single page view. It should have sufficient entropy to be unique for
     // all the page views a single user is making at a time.
     this.set_('PAGE_VIEW_ID', () => {
-      documentInfoFor(this.win_).pageViewId;
+      return documentInfoFor(this.win_).pageViewId;
+    });
+
+    this.set_('CLIENT_ID', (opt_name, opt_userNotificationId) => {
+      let consent = Promise.resolve();
+
+      // If no `opt_userNotificationId` argument is provided then
+      // assume consent is given by default.
+      if (opt_userNotificationId) {
+        consent = userNotificationManagerFor(this.win_).then(service => {
+          return service.get(opt_userNotificationId);
+        });
+      }
+
+      return cidFor(this.win_).then(cid => {
+        return cid.get(opt_name, consent);
+      });
+    });
+
+    // Returns the number of milliseconds since 1 Jan 1970 00:00:00 UTC.
+    this.set_('TIMESTAMP', () => {
+      return new Date().getTime();
+    });
+
+    // Returns the user's time-zone offset from UTC, in minutes.
+    this.set_('TIMEZONE', () => {
+      return new Date().getTimezoneOffset();
+    });
+
+    // Returns a promise resolving to viewport.getScrollTop.
+    this.set_('SCROLL_TOP', () => {
+      return vsyncFor(this.win_).measurePromise(
+        () => viewportFor(this.win_).getScrollTop());
+    });
+
+    // Returns a promise resolving to viewport.getScrollLeft.
+    this.set_('SCROLL_LEFT', () => {
+      return vsyncFor(this.win_).measurePromise(
+        () => viewportFor(this.win_).getScrollLeft());
+    });
+
+    // Returns a promise resolving to viewport.getScrollHeight.
+    this.set_('SCROLL_HEIGHT', () => {
+      return vsyncFor(this.win_).measurePromise(
+        () => viewportFor(this.win_).getScrollHeight());
+    });
+
+    // Returns screen.width.
+    this.set_('SCREEN_WIDTH', () => {
+      return this.win_.screen.width;
+    });
+
+    // Returns screen.height.
+    this.set_('SCREEN_HEIGHT', () => {
+      return this.win_.screen.height;
     });
   }
 
@@ -95,8 +155,6 @@ class UrlReplacements {
    * @private
    */
   set_(varName, resolver) {
-    assert(varName == varName.toUpperCase(),
-        'Variable name must be in upper case: %s', varName);
     this.replacements_[varName] = resolver;
     this.replacementExpr_ = undefined;
     return this;
@@ -104,37 +162,93 @@ class UrlReplacements {
 
   /**
    * Expands the provided URL by replacing all known variables with their
-   * resolved values.
+   * resolved values. Optional `opt_bindings` can be used to add new variables
+   * or override existing ones.
    * @param {string} url
-   * @param {*} opt_data
-   * @return {string}
+   * @param {!Object<string, *>=} opt_bindings
+   * @return {!Promise<string>}
    */
-  expand(url, opt_data) {
-    const expr = this.getExpr_();
-    return url.replace(expr, (match, name) => {
-      let val = this.replacements_[name](opt_data);
+  expand(url, opt_bindings) {
+    const expr = this.getExpr_(opt_bindings);
+    let replacementPromise;
+    const encodeValue = val => {
       // Value 0 is specialcased because the numeric 0 is a valid substitution
       // value.
       if (!val && val !== 0) {
         val = '';
       }
       return encodeURIComponent(val);
+    };
+    url = url.replace(expr, (match, name, opt_strargs) => {
+      let args = [];
+      if (typeof opt_strargs == 'string') {
+        args = opt_strargs.split(',');
+      }
+      const val =
+          (args.length == 0 && opt_bindings && (name in opt_bindings)) ?
+          opt_bindings[name] :
+          this.replacements_[name].apply(this.replacements_, args);
+      // In case the produced value is a promise, we don't actually
+      // replace anything here, but do it again when the promise resolves.
+      if (val && val.then) {
+        const p = val.then(v => {
+          url = url.replace(match, encodeValue(v));
+        }, err => {
+          log.error(TAG_, 'Failed to expand: ' + name, err);
+        });
+        if (replacementPromise) {
+          replacementPromise = replacementPromise.then(() => p);
+        } else {
+          replacementPromise = p;
+        }
+        return match;
+      }
+      return encodeValue(val);
     });
+
+    if (replacementPromise) {
+      replacementPromise = replacementPromise.then(() => url);
+    }
+
+    return replacementPromise || Promise.resolve(url);
   }
 
   /**
+   * @param {!Object<string, *>=} opt_bindings
    * @return {!RegExp}
    * @private
    */
-  getExpr_() {
+  getExpr_(opt_bindings) {
+    const additionalKeys = opt_bindings ? Object.keys(opt_bindings) : null;
+    if (additionalKeys && additionalKeys.length > 0) {
+      const allKeys = Object.keys(this.replacements_);
+      additionalKeys.forEach(key => {
+        if (allKeys[key] === undefined) {
+          allKeys.push(key);
+        }
+      });
+      return this.buildExpr_(allKeys);
+    }
     if (!this.replacementExpr_) {
-      let all = '';
-      for (const k in this.replacements_) {
-        all += (all.length > 0 ? '|' : '') + k;
-      }
-      this.replacementExpr_ = new RegExp('\\$?(' + all + ')', 'g');
+      this.replacementExpr_ = this.buildExpr_(Object.keys(this.replacements_));
     }
     return this.replacementExpr_;
+  }
+
+  /**
+   * @param {!Array<string>} keys
+   * @return {!RegExp}
+   * @private
+   */
+  buildExpr_(keys) {
+    const all = keys.join('|');
+    // Match the given replacement patterns, as well as optionally
+    // arguments to the replacement behind it in parantheses.
+    // Example string that match
+    // FOO_BAR
+    // FOO_BAR(arg1)
+    // FOO_BAR(arg1,arg2)
+    return new RegExp('\\$?(' + all + ')(?:\\(([0-9a-zA-Z-_,]+)\\))?', 'g');
   }
 }
 

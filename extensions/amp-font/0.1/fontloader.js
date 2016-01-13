@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+/*eslint no-unused-vars: 0*/
 /**
  * @typedef {{
  *  style: string,
@@ -23,7 +24,7 @@
  *  family: string
  * }}
  */
-let FontConfig;
+let FontConfigDef;
 
 
 /** @private @const {Array.<string>} */
@@ -62,7 +63,7 @@ export class FontLoader {
     this.fontLoadResolved_ = false;
     /** @private {boolean} */
     this.fontLoadRejected_ = false;
-    /** @private {FontConfig} */
+    /** @private {FontConfigDef} */
     this.fontConfig_ = null;
   }
 
@@ -70,7 +71,7 @@ export class FontLoader {
   /**
    * Triggers the font load. Returns promise that will complete when loading
    * is considered to be complete.
-   * @param {!FontConfig} fontConfig Config that describes the font to be
+   * @param {!FontConfigDef} fontConfig Config that describes the font to be
    *    loaded.
    * @param {number} timeout number of milliseconds after which the font load
    *    attempt would be stopped.
@@ -134,7 +135,7 @@ export class FontLoader {
    * @private
    */
   canUseNativeApis_() {
-    return 'fonts' in this.document_ && false;
+    return 'fonts' in this.document_;
   }
 
 
@@ -179,7 +180,8 @@ export class FontLoader {
     const containerElement = this.container_ =
         this.document_.createElement('div');
     style.setStyles(containerElement, {
-      fontSize: this.fontConfig_.size,
+      // Use larger font-size to better detect font load.
+      fontSize: '40px',
       fontVariant: this.fontConfig_.variant,
       left: '-999px',
       lineHeight: 'normal',

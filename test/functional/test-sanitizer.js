@@ -39,10 +39,18 @@ describe('sanitizeHtml', () => {
 
   it('should NOT output security-sensitive markup', () => {
     expect(sanitizeHtml('a<script>b</script>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<script>b<img>d</script>c')).to.be.equal('ac');
     expect(sanitizeHtml('a<style>b</style>c')).to.be.equal('ac');
     expect(sanitizeHtml('a<img>c')).to.be.equal('ac');
     expect(sanitizeHtml('a<iframe></iframe>c')).to.be.equal('ac');
     expect(sanitizeHtml('a<template></template>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<frame></frame>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<video></video>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<audio></audio>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<applet></applet>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<form></form>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<link></link>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<meta></meta>c')).to.be.equal('ac');
   });
 
   it('should NOT output security-sensitive markup when nested', () => {
@@ -79,10 +87,34 @@ describe('sanitizeHtml', () => {
         'a<a>b</a>');
     expect(sanitizeHtml('a<a href="JAVASCRIPT:alert">b</a>')).to.be.equal(
         'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="vbscript:alert">b</a>')).to.be.equal(
+        'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="VBSCRIPT:alert">b</a>')).to.be.equal(
+        'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="data:alert">b</a>')).to.be.equal(
+        'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="DATA:alert">b</a>')).to.be.equal(
+        'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="<script">b</a>')).to.be.equal(
+        'a<a>b</a>');
+    expect(sanitizeHtml('a<a href="</script">b</a>')).to.be.equal(
+        'a<a>b</a>');
+  });
+
+  it('should catch attribute value whitespace variations', () => {
+    expect(sanitizeHtml('a<a href=" j\na\tv\ra s&#00;cript:alert">b</a>'))
+        .to.be.equal('a<a>b</a>');
   });
 
   it('should NOT output security-sensitive attributes', () => {
     expect(sanitizeHtml('a<a onclick="alert">b</a>')).to.be.equal('a<a>b</a>');
+  });
+
+  it('should apply html4/caja restrictions', () => {
+    expect(sanitizeHtml('a<dialog>b</dialog>c')).to.be.equal('ac');
+    expect(sanitizeHtml('a<dialog>b<img>d</dialog>c')).to.be.equal('ac');
+    expect(sanitizeHtml('<div class="c" src="d">b</div>')).to.be
+        .equal('<div class="c" src="">b</div>');
   });
 });
 

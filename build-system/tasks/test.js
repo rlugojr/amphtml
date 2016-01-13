@@ -42,7 +42,10 @@ function getConfig() {
     if (!process.env.SAUCE_ACCESS_KEY) {
       throw new Error('Missing SAUCE_ACCESS_KEY Env variable');
     }
-    return extend(obj, karmaConfig.saucelabs);
+    const c = extend(obj, karmaConfig.saucelabs);
+    if (argv.oldchrome) {
+      c.browsers = ['SL_Chrome_37']
+    }
   }
 
   return extend(obj, karmaConfig.default);
@@ -81,6 +84,13 @@ gulp.task('test', 'Runs tests in chrome', ['build'], function(done) {
     c.files = config.testPaths;
   }
 
+  if (argv.compiled) {
+    if (!argv.integration) {
+      throw new Error('Compiled tests are only supported for integration tests');
+    }
+    c.client.amp.useCompiledJs = true;
+  }
+
   karma.start(c, done);
 }, {
   options: {
@@ -89,6 +99,9 @@ gulp.task('test', 'Runs tests in chrome', ['build'], function(done) {
     'saucelabs': '  Runs test on saucelabs (requires setup)',
     'safari': '  Runs tests in Safari',
     'firefox': '  Runs tests in Firefox',
-    'integration': 'Run only integration tests.'
+    'integration': 'Run only integration tests.',
+    'compiled': 'Changes integration tests to use production JS ' +
+        'binaries for execution',
+    'oldchrome': 'Runs test with an old chrome. Saucelabs only.',
   }
 });

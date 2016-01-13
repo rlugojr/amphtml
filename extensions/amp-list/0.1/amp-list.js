@@ -16,17 +16,13 @@
 
 import {urlReplacementsFor} from '../../../src/url-replacements';
 import {assertHttpsUrl} from '../../../src/url';
-import {childElementByAttr} from '../../../src/dom';
 import {isLayoutSizeDefined} from '../../../src/layout';
-import {log} from '../../../src/log';
 import {templatesFor} from '../../../src/template';
 import {xhrFor} from '../../../src/xhr';
 
+
 /** @const {!Function} */
 const assert = AMP.assert;
-
-/** @const {string} */
-const TAG = 'AmpList';
 
 
 /**
@@ -56,19 +52,20 @@ export class AmpList extends AMP.BaseElement {
 
   /** @override */
   layoutCallback() {
-    const src = this.urlReplacements_.expand(assertHttpsUrl(
-        this.element.getAttribute('src'), this.element));
-    const opts = {
-      credentials: this.element.getAttribute('credentials')
-    };
-    return xhrFor(this.getWin()).fetchJson(src, opts).then(data => {
-      assert(typeof data == 'object' && Array.isArray(data['items']),
-          'Response must be {items: []} object %s %s',
-          this.element, data);
-      const items = data['items'];
-      return templatesFor(this.getWin()).findAndRenderTemplateArray(
-          this.element, items).then(this.rendered_.bind(this));
-    });
+    return this.urlReplacements_.expand(assertHttpsUrl(
+        this.element.getAttribute('src'), this.element)).then(src => {
+          const opts = {
+            credentials: this.element.getAttribute('credentials')
+          };
+          return xhrFor(this.getWin()).fetchJson(src, opts);
+        }).then(data => {
+          assert(typeof data == 'object' && Array.isArray(data['items']),
+              'Response must be {items: []} object %s %s',
+              this.element, data);
+          const items = data['items'];
+          return templatesFor(this.getWin()).findAndRenderTemplateArray(
+              this.element, items).then(this.rendered_.bind(this));
+        });
   }
 
   /**
@@ -88,7 +85,7 @@ export class AmpList extends AMP.BaseElement {
       const scrollHeight = this.container_./*OK*/scrollHeight;
       const height = this.element./*OK*/offsetHeight;
       if (scrollHeight > height) {
-        this.requestChangeHeight(scrollHeight);
+        this.attemptChangeHeight(scrollHeight);
       }
     });
   }

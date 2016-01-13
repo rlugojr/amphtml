@@ -16,23 +16,7 @@
  */
 goog.require('amp.validator.validateString');
 goog.require('amp.validator.renderValidationResult');
-goog.provide('amp.validator.validatorTest');
-
-/**
- * This function allows us to inject NodeJS dependencies into the test.
- * It encloses the contents of the remainder of the file. This
- * function gets called from a small NodeJS script (e.g. in our github
- * project, see build.py, GenerateValidatorTest).
- * @param {!Array<string>} testdataDirs
- * @param {?} assert The NodeJS assert module.
- * @param {?} fs The NodeJS fs module.
- * @param {?} path The NodeJS path module.
- * @param {?} describe The describe function from jasmin.
- * @param {?} it The it function from jasmin.
- * @export
- */
-amp.validator.validatorTest = function(testdataDirs, assert, fs,
-                                       path, describe, it) {
+goog.provide('amp.validator.ValidatorTest');
 
 /**
  * Returns the absolute path for a given test file, that is, a file
@@ -42,7 +26,7 @@ amp.validator.validatorTest = function(testdataDirs, assert, fs,
  * @return {!string}
  */
 function absolutePathFor(testFile) {
-  for (const dir of testdataDirs) {
+  for (const dir of process.env['TESTDATA_DIRS'].split(':')) {
     const candidate = path.join(dir, testFile);
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -59,7 +43,7 @@ function absolutePathFor(testFile) {
  */
 function findHtmlFilesRelativeToTestdata() {
   const testFiles = [];
-  for (const dir of testdataDirs) {
+  for (const dir of process.env['TESTDATA_DIRS'].split(':')) {
     for (const subdir of /** @type {!Array<!string>} */(
         fs.readdirSync(path.join(dir)))) {
       for (const candidate of /** @type {!Array<!string>} */(
@@ -78,11 +62,13 @@ function findHtmlFilesRelativeToTestdata() {
  * and also find the adjacent .out file.
  * @constructor
  */
-const ValidatorTestCase = function(ampHtmlFile) {
+const ValidatorTestCase = function(ampHtmlFile, opt_ampUrl) {
   /** @type {!string} */
   this.name = ampHtmlFile;
   /** @type {!string} */
   this.ampHtmlFile = ampHtmlFile;
+  /** @type {!string} */
+  this.ampUrl = opt_ampUrl || ampHtmlFile;
   /**
    * This field can be null, indicating that the expectedOutput did not
    * come from a file.
@@ -105,7 +91,7 @@ const ValidatorTestCase = function(ampHtmlFile) {
 ValidatorTestCase.prototype.run = function() {
   const results = amp.validator.validateString(this.ampHtmlFileContents);
   const observed = amp.validator.renderValidationResult(
-      results, this.ampHtmlFile).join('\n');
+      results, this.ampUrl).join('\n');
   if (observed === this.expectedOutput) {
     return;
   }
@@ -135,6 +121,25 @@ describe('ValidatorFeatures', () => {
   }
 });
 
+describe('ValidatorOutput', () => {
+  // What's tested here is that if a URL with #development=1 is passed
+  // (or any other hash), the validator output won't include the hash.
+  it('produces expected output with hash in the URL', () => {
+    const test = new ValidatorTestCase('feature_tests/no_custom_js.html',
+        'http://google.com/foo.html#development=1');
+    test.expectedOutputFile = null;
+    test.expectedOutput =
+        'FAIL\n' +
+        'http://google.com/foo.html:28:3 INVALID_ATTR_VALUE ' +
+        'src=https://example.com/v0-not-allowed.js ' +
+        '(see https://github.com/ampproject/amphtml/blob/master/' +
+        'spec/amp-html-format.md#scrpt)\n' +
+        'http://google.com/foo.html:29:3 INVALID_ATTR_VALUE ' +
+        'src=https://example.com/v0/not-allowed.js';
+    test.run();
+  });
+});
+
 describe('ValidatorCssLengthValidation', () => {
   // Rather than encoding some really long author stylesheets in
   // testcases, which would be difficult to read/verify that the
@@ -153,6 +158,7 @@ describe('ValidatorCssLengthValidation', () => {
     const test = new ValidatorTestCase('feature_tests/css_length.html');
     test.ampHtmlFileContents = test.ampHtmlFileContents.replace(
         '.replaceme {}', maxBytes);
+    test.run();
   });
 
   it('will not accept 50001 bytes in author stylesheet - one too many', () => {
@@ -168,6 +174,7 @@ describe('ValidatorCssLengthValidation', () => {
         'seen: 50001 bytes, limit: 50000 bytes ' +
         '(see https://github.com/ampproject/amphtml/blob/master/spec/' +
         'amp-html-format.md#maximum-size)';
+    test.run();
   });
 
   it('knows utf8 and rejects file w/ 50002 bytes but 49999 characters', () => {
@@ -183,6 +190,96 @@ describe('ValidatorCssLengthValidation', () => {
         'seen: 50002 bytes, limit: 50000 bytes ' +
         '(see https://github.com/ampproject/amphtml/blob/master/spec/' +
         'amp-html-format.md#maximum-size)';
+    test.run();
   });
 });
-};
+
+describe('CssLengthAndUnit', () => {
+  it('parses a basic example', () => {
+    const parsed = new amp.validator.CssLengthAndUnit(
+        '10.1em', /* allowAuto */ false);
+    expect(parsed.isSet).toBe(true);
+    expect(parsed.isValid).toBe(true);
+    expect(parsed.unit).toEqual('em');
+    expect(parsed.isAuto).toBe(false);
+  });
+
+  it('supports several units', () => {
+    for (const allowedUnit of ['px', 'em', 'rem', 'vh', 'vmin', 'vmax']) {
+      const example = '10' + allowedUnit;
+      const parsed = new amp.validator.CssLengthAndUnit(
+          example, /* allowAuto */ false);
+      expect(parsed.isSet).toBe(true);
+      expect(parsed.isValid).toBe(true);
+      expect(parsed.unit).toEqual(allowedUnit);
+      expect(parsed.isAuto).toBe(false);
+    }
+  });
+
+  it('understands empty unit as "px"', () => {
+    const parsed = new amp.validator.CssLengthAndUnit(
+        '10', /* allowAuto */ false);
+    expect(parsed.isSet).toBe(true);
+    expect(parsed.isValid).toBe(true);
+    expect(parsed.unit).toEqual('px');
+    expect(parsed.isAuto).toBe(false);
+  });
+
+  it('understands undefined input as valid (means attr is not set)', () => {
+    const parsed = new amp.validator.CssLengthAndUnit(
+        undefined, /* allowAuto */ false);
+    expect(parsed.isSet).toBe(false);
+    expect(parsed.isValid).toBe(true);
+    expect(parsed.unit).toEqual('px');
+    expect(parsed.isAuto).toBe(false);
+  });
+
+  it('understands empty string as invalid (means attr value is empty)', () => {
+    const parsed = new amp.validator.CssLengthAndUnit(
+        "", /* allowAuto */ false);
+    expect(parsed.isValid).toBe(false);
+  });
+
+  it('considers other garbage as invalid', () => {
+    expect(new amp.validator.CssLengthAndUnit(
+        '100%', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(
+        'not a number', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(
+        '1.1.1', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(
+        '5 inches', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(
+        'fahrenheit', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(
+        'px', /* allowAuto */ false).isValid).toBe(false);
+    expect(new amp.validator.CssLengthAndUnit(  // screen size in ancient Rome.
+        'ix unciae', /* allowAuto */ false).isValid).toBe(false);
+  });
+
+  it('recongizes auto if allowed', () => {
+    {  // allow_auto = false with input != auto
+      const parsed = new amp.validator.CssLengthAndUnit(
+          "1", /* allowAuto */ false);
+      expect(parsed.isValid).toBe(true);
+      expect(parsed.isAuto).toBe(false);
+    }
+    {  // allow_auto = true with input == auto
+      const parsed = new amp.validator.CssLengthAndUnit(
+          "1", /* allowAuto */ true);
+      expect(parsed.isValid).toBe(true);
+      expect(parsed.isAuto).toBe(false);
+    }
+    {  // allow_auto = false with input = auto
+      const parsed = new amp.validator.CssLengthAndUnit(
+          "auto", /* allowAuto */ false);
+      expect(parsed.isValid).toBe(false);
+    }
+    {  // allow_auto = true with input = auto
+      const parsed = new amp.validator.CssLengthAndUnit(
+          "auto", /* allowAuto */ true);
+      expect(parsed.isValid).toBe(true);
+      expect(parsed.isAuto).toBe(true);
+    }
+  });
+});

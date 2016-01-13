@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {isLoaded, listenOnce, listenOncePromise, loadPromise}
+import {isLoaded, listen, listenOnce, listenOncePromise, loadPromise}
     from '../../src/event-helper';
 import {Observable} from '../../src/observable';
 import * as sinon from 'sinon';
@@ -71,6 +71,31 @@ describe('EventHelper', () => {
     element = null;
     sandbox.restore();
     sandbox = null;
+  });
+
+  it('listen', () => {
+    const event = getEvent('load');
+    let c = 0;
+    const handler = e => {
+      c++;
+      expect(e).to.equal(event);
+    };
+    const unlisten = listen(element, 'load', handler);
+
+    // Not fired yet.
+    expect(c).to.equal(0);
+
+    // Fired once.
+    loadObservable.fire(event);
+    expect(c).to.equal(1);
+
+    // Fired second time.
+    loadObservable.fire(event);
+    expect(c).to.equal(2);
+
+    unlisten();
+    loadObservable.fire(event);
+    expect(c).to.equal(2);
   });
 
   it('listenOnce', () => {
@@ -176,7 +201,7 @@ describe('EventHelper', () => {
   it('loadPromise - error event', () => {
     const promise = loadPromise(element).then(result => {
       assert.fail('must never be here: ' + result);
-    }).catch(reason => {
+    }).catch(unusedReason => {
     });
     errorObservable.fire(getEvent('error'));
     return promise;

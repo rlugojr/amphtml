@@ -25,24 +25,36 @@ import {getService} from './service';
  * See https://developer.mozilla.org/en-US/docs/Web/API/GlobalFetch/fetch
  *
  * @typedef {{
- *   credentials: string
+ *   body: (!Object|!Array|undefined),
+ *   credentials: (string|undefined),
+ *   headers: (!Object|undefined),
+ *   method: (string|undefined)
  * }}
  */
-const FetchInit = {};
+let FetchInitDef;
+
+/** @private @const {!Array<string>} */
+const allowedMethods_ = ['GET', 'POST'];
+
+/** @private @const {!Array<string>} */
+const allowedBodyTypes_ = ['[object Object]', '[object Array]'];
 
 
 /**
  * A service that polyfills Fetch API for use within AMP.
  */
 class Xhr {
+
   /**
    * @param {!Window} win
    */
   constructor(win) {
     /**
-     * @private @type {function(string, ?FetchInit=):!Promise<!FetchResponse>}
+     * We want to call `fetch_` unbound from any context since it could
+     * be either the native fetch or our polyfill.
+     * @private @const {function(string, ?FetchInitDef=):!Promise<!FetchResponse>}
      */
-    this.fetch_ = win.fetch || fetchPolyfill;
+    this.fetch_ = (win.fetch || fetchPolyfill).bind(null);
   }
 
   /**
@@ -51,13 +63,74 @@ class Xhr {
    * See https://developer.mozilla.org/en-US/docs/Web/API/GlobalFetch/fetch
    *
    * @param {string} input
-   * @param {?FetchInit=} opt_init
+   * @param {?FetchInitDef=} opt_init
    * @return {!Promise<!JSONValue>}
    */
   fetchJson(input, opt_init) {
-    return this.fetch_.call(null, input, opt_init).then(response => {
+    const init = opt_init || {};
+    init.method = normalizeMethod_(init.method);
+    setupJson_(init);
+
+    return this.fetch_(input, init).then(response => {
       return assertSuccess(response).json();
     });
+  }
+
+  /**
+   * Sends the request, awaits result and confirms that it was successful.
+   *
+   * See https://developer.mozilla.org/en-US/docs/Web/API/GlobalFetch/fetch
+   *
+   * @param {string} input
+   * @param {?FetchInitDef=} opt_init
+   * @return {!Promise}
+   */
+  sendSignal(input, opt_init) {
+    return this.fetch_(input, opt_init).then(response => {
+      assertSuccess(response);
+    });
+  }
+}
+
+
+/**
+ * Normalized method name by uppercasing.
+ * @param {string|undefined} method
+ * @return {string}
+ * @private
+ */
+export function normalizeMethod_(method) {
+  if (method === undefined) {
+    return 'GET';
+  }
+  return method.toUpperCase();
+}
+
+/**
+* Initialize init object with headers and stringifies the body.
+ * @param {!FetchInitDef} init
+ * @private
+ */
+function setupJson_(init) {
+  assert(allowedMethods_.indexOf(init.method) != -1, 'Only one of ' +
+      allowedMethods_.join(', ') + ' is currently allowed. Got %s',
+      init.method);
+
+  init.headers = {
+    'Accept': 'application/json'
+  };
+
+  if (init.method == 'POST') {
+    const bodyType = Object.prototype.toString.call(init.body);
+
+    // Assume JSON strict mode where only objects or arrays are allowed
+    // as body.
+    assert(allowedBodyTypes_.indexOf(bodyType) > -1,
+        'body must be of type object or array. %s',
+        init.body);
+
+    init.headers['Content-Type'] = 'application/json;charset=utf-8';
+    init.body = JSON.stringify(init.body);
   }
 }
 
@@ -71,7 +144,7 @@ class Xhr {
  * us to immediately support a much wide API.
  *
  * @param {string} input
- * @param {?FetchInit=} opt_init
+ * @param {!FetchInitDef=} opt_init
  * @return {!Promise<!FetchResponse>}
  * @private Visible for testing
  */
@@ -82,7 +155,7 @@ export function fetchPolyfill(input, opt_init) {
       'Only credentials=include support: %s', init.credentials);
 
   return new Promise(function(resolve, reject) {
-    const xhr = createXhrRequest(init.method || 'GET', input);
+    const xhr = createXhrRequest(init.method || 'GET', input, init);
 
     if (init.credentials == 'include') {
       xhr.withCredentials = true;
@@ -112,7 +185,11 @@ export function fetchPolyfill(input, opt_init) {
       reject(new Error('Request aborted'));
     };
 
-    xhr.send();
+    if (init.method == 'POST') {
+      xhr.send(init.body);
+    } else {
+      xhr.send();
+    }
   });
 }
 
@@ -120,10 +197,11 @@ export function fetchPolyfill(input, opt_init) {
 /**
  * @param {string} method
  * @param {string} url
+ * @param {!FetchInitDef} init
  * @return {!XMLHttpRequest}
  * @private
  */
-function createXhrRequest(method, url) {
+function createXhrRequest(method, url, init) {
   let xhr = new XMLHttpRequest();
   if ('withCredentials' in xhr) {
     xhr.open(method, url, true);
@@ -133,6 +211,12 @@ function createXhrRequest(method, url) {
     xhr.open(method, url);
   } else {
     throw new Error('CORS is not supported');
+  }
+
+  if (init.headers) {
+    Object.keys(init.headers).forEach(function(header) {
+      xhr.setRequestHeader(header, init.headers[header]);
+    });
   }
   return xhr;
 }
@@ -144,7 +228,7 @@ function createXhrRequest(method, url) {
  * @return {!FetchResponse}
  */
 function assertSuccess(response) {
-  if (response.status != 200) {
+  if (response.status < 200 || response.status > 299) {
     throw new Error(`HTTP error ${response.status}`);
   }
   return response;

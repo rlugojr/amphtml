@@ -50,7 +50,7 @@ Required when `data-do` is `buttonPin`.  Contains the fully-qualified URL of the
 
 Required when `data-do` is `buttonPin`.  Contains the default description that appears in the pin create form; please choose carefully, since many Pinners will close the form without pinning if it doesn't make sense.
 
-### Iframe Sizing for the Pin It Button
+### Sizing the Pin It Button
 
 Default small rectangular button:
 
@@ -83,6 +83,16 @@ Small circular button using `data-round="true"`
 Large circular button using `data-round="true"` and `data-height="tall"`
 
     height=32 width=32
+
+## Follow Button
+
+**data-href**
+
+Required when `data-do` is `buttonFollow`.  Contains the fully qualified Pinterest user profile url to follow.
+
+**data-label**
+
+Required when `data-do` is `buttonFollow`.  Contains the text to display on the follow button.
 
 ## Embedded Pin Widget
 

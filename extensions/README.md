@@ -20,6 +20,7 @@ Current list of extended components:
 | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | [`amp-anim`](amp-anim/amp-anim.md)                     | Runtime-managed animated image, most typically a GIF.                                       |
 | [`amp-audio`](amp-audio/amp-audio.md)                      | Replacement for the HTML5 `audio` tag.                                                      |
+| [`amp-brightcove`](amp-brightcove/amp-brightcove.md)             | Displays a Brightcove Video Cloud or Perform player. |
 | [`amp-carousel`](amp-carousel/amp-carousel.md)                | Generic carousel for displaying multiple similar pieces of content along a horizontal axis. |
 | [`amp-fit-text`](amp-fit-text/amp-fit-text.md)                | Expand or shrink font size to fit the content within the space given.                       |
 | [`amp-font`](amp-font/amp-font.md)                | Trigger and monitor the loading of custom fonts.                       |
@@ -30,6 +31,7 @@ Current list of extended components:
 | [`amp-lightbox`](amp-lightbox/amp-lightbox.md)             | Allows for a “lightbox” or similar experience.                                              |
 | [`amp-list`](amp-list/amp-list.md)             | A dynamic list that can download data and create list items using a template |
 | [`amp-twitter`](amp-twitter/amp-twitter.md)               | Displays a Twitter Tweet.                                                                   |
+| [`amp-vine`](amp-vine/amp-vine.md)               | Displays a Vine simple embed.                                                                   |
 | [`amp-youtube`](amp-youtube/amp-youtube.md)               | Displays a Youtube video.                                                                   |
 
 
@@ -50,5 +52,4 @@ Current list of extended templates:
 
 | Component                                     | Description                                                                                 |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------
-|
 | [`amp-mustache`](amp-mustache/amp-mustache.md) | Mustache template.                                       |

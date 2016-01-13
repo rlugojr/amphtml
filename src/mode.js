@@ -22,14 +22,14 @@ import {parseQueryString} from './url';
  *   localDev: boolean
  * }}
  */
-let Mode;
+let ModeDef;
 
-/** @typedef {?Mode} */
+/** @typedef {?ModeDef} */
 let mode = null;
 
 /**
  * Provides info about the current app.
- * @return {!Mode}
+ * @return {!ModeDef}
  */
 export function getMode() {
   if (mode) {
@@ -40,7 +40,7 @@ export function getMode() {
 
 /**
  * Set mode in a test. Pass null in afterEach function to reset.
- * @param {?Mode} m
+ * @param {?ModeDef} m
  */
 export function setModeForTesting(m) {
   mode = m;
@@ -48,7 +48,7 @@ export function setModeForTesting(m) {
 
 /**
  * Provides info about the current app.
- * @return {!Mode}
+ * @return {!ModeDef}
  */
 function getMode_() {
   const isLocalDev = (location.hostname == 'localhost' ||
@@ -59,11 +59,13 @@ function getMode_() {
       // occur during local dev.
       !!document.querySelector('script[src*="/dist/"],script[src*="/base/"]');
 
-  const overrideDevelopment = parseQueryString(location.hash)['development'];
+  const overrideDevelopment = parseQueryString(
+      // location.originalHash is set by the viewer when it removes the fragment
+      // from the URL.
+      location.originalHash || location.hash)['development'];
   const development = overrideDevelopment != undefined
       ? overrideDevelopment == '1'
       : !!document.querySelector('script[development]');
-
   return {
     localDev: isLocalDev,
     // Triggers validation

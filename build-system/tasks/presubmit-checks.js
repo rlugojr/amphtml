@@ -29,6 +29,10 @@ var requiresReviewPrivacy =
     'being privacy sensitive. Please file an issue asking for permission' +
     ' to use if you have not yet done so.';
 
+var privateServiceFactory = 'This service should only be installed in ' +
+    'the whitelisted files. Other modules should use a public function ' +
+    'typically called serviceNameFor.';
+
 // Terms that must not appear in our source files.
 var forbiddenTerms = {
   'DO NOT SUBMIT': '',
@@ -44,39 +48,104 @@ var forbiddenTerms = {
       'validator/validator-in-browser.js',
     ]
   },
+  // Service factories that should only be installed once.
+  'installActionService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/service/action-impl.js',
+      'src/amp-core-service.js',
+    ],
+  },
+  'installActionHandler': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/service/action-impl.js',
+      'extensions/amp-access/0.1/amp-access.js',
+    ],
+  },
+  'installCidService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/service/cid-impl.js',
+      'extensions/amp-access/0.1/amp-access.js',
+      'extensions/amp-analytics/0.1/amp-analytics.js',
+    ],
+  },
+  'installViewerService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp-core-service.js',
+      'src/service/history-impl.js',
+      'src/service/resources-impl.js',
+      'src/service/viewer-impl.js',
+      'src/service/viewport-impl.js',
+      'src/service/vsync-impl.js',
+    ],
+  },
+  'installViewportService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp-core-service.js',
+      'src/service/resources-impl.js',
+      'src/service/viewport-impl.js',
+    ],
+  },
+  'installVsyncService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp-core-service.js',
+      'src/service/resources-impl.js',
+      'src/service/viewport-impl.js',
+      'src/service/vsync-impl.js',
+    ],
+  },
+  'installResourcesService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp-core-service.js',
+      'src/service/resources-impl.js',
+    ],
+  },
+  // Privacy sensitive
   'cidFor': {
     message: requiresReviewPrivacy,
     whitelist: [
       'src/cid.js',
-      'test/functional/test-cid.js',
+      'src/service/cid-impl.js',
+      'src/url-replacements.js',
+      'extensions/amp-access/0.1/amp-access.js',
+      'extensions/amp-user-notification/0.1/amp-user-notification.js',
+    ],
+  },
+  'getBaseCid': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'src/service/cid-impl.js',
+      'src/service/viewer-impl.js',
     ],
   },
   'cookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
       'src/cookies.js',
-      'src/cid.js',
-      'test/functional/test-cid.js',
-      'test/functional/test-cookies.js',
-      'test/functional/test-experiments.js',
+      'src/service/cid-impl.js',
     ],
   },
   'getCookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'src/cid.js',
+      'src/service/cid-impl.js',
       'src/cookies.js',
       'src/experiments.js',
-      'test/functional/test-cookies.js',
       'tools/experiments/experiments.js',
     ]
   },
   'setCookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
+      'src/service/cid-impl.js',
       'src/cookies.js',
       'src/experiments.js',
-      'test/functional/test-cookies.js',
       'tools/experiments/experiments.js',
     ]
   },
@@ -84,9 +153,7 @@ var forbiddenTerms = {
   'localStorage': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'test/_init_tests.js',
-      'src/cid.js',
-      'test/functional/test-cid.js',
+      'src/service/cid-impl.js',
     ],
   },
   'sessionStorage': requiresReviewPrivacy,
@@ -117,7 +184,12 @@ var forbiddenTerms = {
   // No spread (eg. test(...args) allowed since we dont ship with Array
   // polyfills except `arguments` spread as babel does not polyfill
   // it since it can assume that it can `slice` w/o the use of helpers.
-  '\\.\\.\\.(?!arguments\\))[_$A-Za-z0-9]*(?:\\)|])': es6polyfill
+  '\\.\\.\\.(?!arguments\\))[_$A-Za-z0-9]*(?:\\)|])': {
+    message: es6polyfill,
+    whitelist: [
+      'extensions/amp-access/0.1/access-expr-impl.js',
+    ],
+  }
 };
 
 var ThreePTermsMessage = 'The 3p bootstrap iframe has no polyfills loaded and' +
@@ -199,6 +271,18 @@ var requiredTerms = {
       dedicatedCopyrightNoteSources,
 };
 
+
+/**
+ * Check if root of path is test/ or file is in a folder named test.
+ * @param {string} path
+ * @return {boolean}
+ */
+function isInTestFolder(path) {
+  var dirs = path.split('/');
+  var folder = dirs[dirs.length - 2];
+  return path.startsWith('test/') || folder == 'test';
+}
+
 /**
  * Logs any issues found in the contents of file based on terms (regex
  * patterns), and provides any possible fix information for matched terms if
@@ -219,7 +303,8 @@ function matchTerms(file, terms) {
     var whitelist = terms[term].whitelist;
     // NOTE: we could do a glob test instead of exact check in the future
     // if needed but that might be too permissive.
-    if (Array.isArray(whitelist) && whitelist.indexOf(relative) != -1) {
+    if (Array.isArray(whitelist) && (whitelist.indexOf(relative) != -1 ||
+        isInTestFolder(relative))) {
       return false;
     }
     // we can't optimize building the `RegExp` objects early unless we build

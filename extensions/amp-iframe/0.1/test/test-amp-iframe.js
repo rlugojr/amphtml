@@ -15,11 +15,13 @@
  */
 
 import {Timer} from '../../../../src/timer';
+import {AmpIframe} from '../amp-iframe';
 import {adopt} from '../../../../src/runtime';
-import {createIframePromise, pollForLayout} from '../../../../testing/iframe';
+import {createIframePromise, pollForLayout, poll}
+    from '../../../../testing/iframe';
 import {loadPromise} from '../../../../src/event-helper';
-import {resourcesFor} from '../../../../src/resources';
-require('../amp-iframe');
+import {viewportFor} from '../../../../src/viewport';
+import * as sinon from 'sinon';
 
 adopt(window);
 
@@ -27,6 +29,8 @@ describe('amp-iframe', () => {
 
   const iframeSrc = 'http://iframe.localhost:' + location.port +
       '/base/test/fixtures/served/iframe.html';
+  const clickableIframeSrc = 'http://iframe.localhost:' + location.port +
+      '/base/test/fixtures/served/iframe-clicktoplay.html';
 
   const timer = new Timer(window);
   let ranJs = 0;
@@ -40,6 +44,12 @@ describe('amp-iframe', () => {
     }
   };
 
+  function waitForJsInIframe() {
+    return poll('waiting for JS to run', () => {
+      return ranJs > 0;
+    }, undefined, 300);
+  }
+
   function getAmpIframe(attributes, opt_top, opt_height, opt_translateY) {
     return createIframePromise().then(function(iframe) {
       const i = iframe.doc.createElement('amp-iframe');
@@ -49,6 +59,7 @@ describe('amp-iframe', () => {
       if (opt_height) {
         iframe.iframe.style.height = opt_height;
       }
+      viewportFor(iframe.win).resize_();
       const top = opt_top || '600px';
       i.style.position = 'absolute';
       i.style.top = top;
@@ -59,6 +70,13 @@ describe('amp-iframe', () => {
         const overflowEl = iframe.doc.createElement('div');
         overflowEl.setAttribute('overflow', '');
         i.appendChild(overflowEl);
+      }
+      if (attributes.poster) {
+        const img = iframe.doc.createElement('amp-img');
+        img.setAttribute('layout', 'fill');
+        img.setAttribute('src', attributes.poster);
+        img.setAttribute('placeholder', '');
+        i.appendChild(img);
       }
       iframe.doc.body.appendChild(i);
       // Wait an event loop for the iframe to be created.
@@ -107,7 +125,7 @@ describe('amp-iframe', () => {
       expect(amp.iframe.src).to.equal(iframeSrc);
       expect(amp.iframe.getAttribute('sandbox')).to.equal('');
       expect(amp.iframe.parentNode).to.equal(amp.scrollWrapper);
-      return timer.promise(0).then(() => {
+      return timer.promise(50).then(() => {
         expect(ranJs).to.equal(0);
       });
     });
@@ -122,7 +140,7 @@ describe('amp-iframe', () => {
       scrolling: 'no'
     }).then(amp => {
       expect(amp.iframe.getAttribute('sandbox')).to.equal('allow-scripts');
-      return timer.promise(100).then(() => {
+      return waitForJsInIframe().then(() => {
         expect(ranJs).to.equal(1);
         expect(amp.scrollWrapper).to.be.null;
       });
@@ -188,7 +206,7 @@ describe('amp-iframe', () => {
       expect(amp.iframe.src).to.equal(dataUri);
       expect(amp.iframe.getAttribute('sandbox')).to.equal('');
       expect(amp.iframe.parentNode).to.equal(amp.scrollWrapper);
-      return timer.promise(0).then(() => {
+      return timer.promise(50).then(() => {
         expect(ranJs).to.equal(0);
       });
     });
@@ -210,7 +228,7 @@ describe('amp-iframe', () => {
       expect(amp.iframe.getAttribute('sandbox')).to.equal(
           'allow-scripts');
       expect(amp.iframe.parentNode).to.equal(amp.scrollWrapper);
-      return timer.promise(0).then(() => {
+      return waitForJsInIframe().then(() => {
         expect(ranJs).to.equal(1);
       });
     });
@@ -227,21 +245,50 @@ describe('amp-iframe', () => {
     });
   });
 
+  it('should deny data uri with allow-same-origin', () => {
+    return getAmpIframe({
+      width: 100,
+      height: 100,
+      sandbox: 'allow-same-origin',
+      src: 'data:text/html;charset=utf-8;base64,' +
+        'PHNjcmlwdD5kb2N1bWVudC53cml0ZSgnUiAnICsgZG9jdW1lbnQucmVmZXJyZXIgK' +
+        'yAnLCAnICsgbG9jYXRpb24uaHJlZik8L3NjcmlwdD4='
+    }).then(amp => {
+      expect(amp.iframe).to.be.null;
+    });
+  });
+
+  it('should deny DATA uri with allow-same-origin', () => {
+    return getAmpIframe({
+      width: 100,
+      height: 100,
+      sandbox: 'allow-same-origin',
+      src: 'DATA:text/html;charset=utf-8;base64,' +
+        'PHNjcmlwdD5kb2N1bWVudC53cml0ZSgnUiAnICsgZG9jdW1lbnQucmVmZXJyZXIgK' +
+        'yAnLCAnICsgbG9jYXRpb24uaHJlZik8L3NjcmlwdD4='
+    }).then(amp => {
+      expect(amp.iframe).to.be.null;
+    });
+  });
+
   it('should deny same origin', () => {
     return getAmpIframeObject().then(amp => {
       expect(() => {
         amp.assertSource('https://google.com/fpp', 'https://google.com/abc',
             'allow-same-origin');
       }).to.throw(/must not be equal to container/);
+
       expect(() => {
         amp.assertSource('https://google.com/fpp', 'https://google.com/abc',
             'allow-same-origin allow-scripts');
       }).to.throw(/must not be equal to container/);
       // Same origin, but sandboxed.
       amp.assertSource('https://google.com/fpp', 'https://google.com/abc', '');
+
       expect(() => {
         amp.assertSource('http://google.com/', 'https://foo.com', '');
       }).to.throw(/Must start with https/);
+
       expect(() => {
         amp.assertSource('./foo', 'https://foo.com', '');
       }).to.throw(/Must start with https/);
@@ -249,11 +296,13 @@ describe('amp-iframe', () => {
       amp.assertSource('http://iframe.localhost:123/foo',
           'https://foo.com', '');
       amp.assertSource('https://container.com', 'https://foo.com', '');
-
       amp.element.setAttribute('srcdoc', 'abc');
       amp.element.setAttribute('sandbox', 'allow-same-origin');
+
       expect(() => {
-        amp.transformSrcDoc();
+        amp.transformSrcDoc('<script>try{parent.location.href}catch(e){' +
+          'parent.parent./*OK*/postMessage(\'loaded-iframe\', \'*\');}' +
+          '</script>', 'Allow-Same-Origin');
       }).to.throw(/allow-same-origin is not allowed with the srcdoc attribute/);
     });
   });
@@ -268,7 +317,7 @@ describe('amp-iframe', () => {
     }).then(amp => {
       const impl = amp.container.implementation_;
       impl.layoutCallback();
-      const p = new Promise((resolve, reject) => {
+      const p = new Promise((resolve, unusedReject) => {
         impl.updateHeight_ = newHeight => {
           resolve({amp: amp, newHeight: newHeight});
         };
@@ -294,12 +343,12 @@ describe('amp-iframe', () => {
       resizable: ''
     }).then(amp => {
       const impl = amp.container.implementation_;
-      impl.requestChangeHeight = sinon.spy();
+      impl.attemptChangeHeight = sinon.spy();
       impl.changeHeight = sinon.spy();
       impl.updateHeight_(217);
       expect(impl.changeHeight.callCount).to.equal(0);
-      expect(impl.requestChangeHeight.callCount).to.equal(1);
-      expect(impl.requestChangeHeight.firstCall.args[0]).to.equal(217);
+      expect(impl.attemptChangeHeight.callCount).to.equal(1);
+      expect(impl.attemptChangeHeight.firstCall.args[0]).to.equal(217);
     });
   });
 
@@ -311,11 +360,32 @@ describe('amp-iframe', () => {
       height: 100
     }).then(amp => {
       const impl = amp.container.implementation_;
-      impl.requestChangeHeight = sinon.spy();
+      impl.attemptChangeHeight = sinon.spy();
       impl.changeHeight = sinon.spy();
       impl.updateHeight_(217);
       expect(impl.changeHeight.callCount).to.equal(0);
-      expect(impl.requestChangeHeight.callCount).to.equal(0);
+      expect(impl.attemptChangeHeight.callCount).to.equal(0);
+    });
+  });
+
+  it('should listen for embed-ready event', () => {
+    sinon.sandbox.create();
+    const activateIframeSpy_ =
+        sinon.spy(AmpIframe.prototype, 'activateIframe_');
+    return getAmpIframe({
+      src: clickableIframeSrc,
+      sandbox: 'allow-scripts',
+      width: 480,
+      height: 360,
+      poster: 'https://i.ytimg.com/vi/cMcCTVAFBWM/hqdefault.jpg'
+    }).then(amp => {
+      const impl = amp.container.implementation_;
+      return timer.promise(100).then(() => {
+        expect(impl.iframe_.style.zIndex).to.equal('');
+        expect(impl.placeholder_).to.be.null;
+        expect(activateIframeSpy_.callCount).to.equal(2);
+        activateIframeSpy_.restore();
+      });
     });
   });
 });

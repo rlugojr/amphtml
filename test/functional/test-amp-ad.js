@@ -15,12 +15,9 @@
  */
 
 import {createIframePromise} from '../../testing/iframe';
-import {installAd, scoreDimensions_, upgradeImages_, AD_LOAD_TIME_MS} from
-    '../../builtins/amp-ad';
+import {installAd} from '../../builtins/amp-ad';
 import {viewportFor} from
     '../../src/viewport';
-import {timer} from '../../src/timer';
-import {vsync} from '../../src/vsync';
 import * as sinon from 'sinon';
 
 describe('amp-ad', () => {
@@ -231,13 +228,33 @@ describe('amp-ad', () => {
       expect(posts).to.have.length(1);
       ampAd.viewportCallback(true);
       expect(posts).to.have.length(2);
-      viewport.changed_(false, 0);
+      viewport.scroll_();
       expect(posts).to.have.length(3);
+      viewport.resize_();
+      expect(posts).to.have.length(4);
       ampAd.viewportCallback(false);
-      expect(posts).to.have.length(4);
+      expect(posts).to.have.length(5);
       // No longer listening.
-      viewport.changed_(false, 0);
+      viewport.scroll_();
+      expect(posts).to.have.length(5);
+      viewport.resize_();
+      expect(posts).to.have.length(5);
+    });
+
+    it('report changes upon remeasure', () => {
+      expect(posts).to.have.length(1);
+      ampAd.viewportCallback(true);
+      expect(posts).to.have.length(2);
+      ampAd.onLayoutMeasure();
+      expect(posts).to.have.length(3);
+      ampAd.onLayoutMeasure();
       expect(posts).to.have.length(4);
+      ampAd.viewportCallback(false);
+      expect(posts).to.have.length(5);
+      // We also send a new record when we are currently not in the
+      // viewport, because that might have just changed.
+      ampAd.onLayoutMeasure();
+      expect(posts).to.have.length(6);
     });
   });
 
@@ -254,54 +271,45 @@ describe('amp-ad', () => {
         ad.appendChild(fallback);
         return ad;
       }).then(ad => {
+        const deferMutateStub = sinon.stub(
+          ad.implementation_, 'deferMutate', function(callback) {
+            callback();
+          });
         expect(ad).to.not.have.class('amp-notsupported');
         ad.implementation_.noContentHandler_();
         expect(ad).to.have.class('amp-notsupported');
+        deferMutateStub.restore();
       });
     });
-  });
 
-  describe('scoreDimensions_', () => {
-
-    it('should choose a matching dimension', () => {
-      const dims = [[320, 200], [320, 210], [320, 200]];
-      const scores = scoreDimensions_(dims, 320, 200);
-      const winner = scores.indexOf(Math.max.apply(Math, scores));
-      expect(winner).to.equal(0);
-    });
-
-    it('should be biased to a smaller height delta', () => {
-      const dims = [[300, 200], [320, 50]];
-      const scores = scoreDimensions_(dims, 300, 50);
-      const winner = scores.indexOf(Math.max.apply(Math, scores));
-      expect(winner).to.equal(1);
-    });
-  });
-
-  describe('upgradeImages_', () => {
-    let images;
-    beforeEach(() => {
-      images = {
-        '300x200': [
-          'backfill-1@1x.png',
-          'backfill-2@1x.png',
-          'backfill-3@1x.png',
-          'backfill-4@1x.png',
-          'backfill-5@1x.png',
-        ],
-        '320x50': [
-          'backfill-6@1x.png',
-          'backfill-7@1x.png',
-        ],
-      };
-    });
-
-    it('should upgrade an image from 1x to 2x', () => {
-      expect(images['300x200'][0]).to.equal('backfill-1@1x.png');
-      expect(images['320x50'][0]).to.equal('backfill-6@1x.png');
-      upgradeImages_(images);
-      expect(images['300x200'][0]).to.equal('backfill-1@2x.png');
-      expect(images['320x50'][0]).to.equal('backfill-6@2x.png');
+    it('should collapse when equestChangeHeight succeeds', () => {
+      return getAd({
+        width: 300,
+        height: 750,
+        type: 'a9',
+        src: 'testsrc',
+      }, 'https://schema.org', ad => {
+        return ad;
+      }).then(ad => {
+        const deferMutateStub = sinon.stub(
+          ad.implementation_, 'deferMutate', function(callback) {
+            callback();
+          });
+        const attemptChangeHeightStub = sinon.stub(ad.implementation_,
+          'attemptChangeHeight',
+          function(height, callback) {
+            ad.style.height = height;
+            callback();
+          });
+        ad.style.position = 'absolute';
+        ad.style.top = '300px';
+        ad.style.left = '50px';
+        expect(ad.style.display).to.not.equal('none');
+        ad.implementation_.noContentHandler_();
+        expect(ad.style.display).to.equal('none');
+        deferMutateStub.restore();
+        attemptChangeHeightStub.restore();
+      });
     });
   });
 

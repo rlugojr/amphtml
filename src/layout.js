@@ -39,27 +39,32 @@ export const Layout = {
  * CSS Length type. E.g. "1px" or "20vh".
  * @typedef {string}
  */
-let Length;
+let LengthDef;
 
 
 /**
  * @typedef {{
- *   width: number,
- *   height: number
+ *   width: string,
+ *   height: string
  * }}
  */
-let Dimensions;
+let DimensionsDef;
 
 
 /**
- * Set or cached browser natural dimensions for elements. The tagname
- * initialized here will return true `hasNaturalDimensions`, even if yet to be
- * calculated. Exported for testing.
- * @type {!Object<string, Dimensions>}
+ * The set of elements with natural dimensions, that is, elements
+ * which have a known dimension either based on their value specified here,
+ * or, if the value is null, a dimension specific to the browser.
+ * `hasNaturalDimensions` checks for membership in this set.
+ * `getNaturalDimensions` determines the dimensions for an element in the
+ *    set and caches it.
+ * @type {!Object<string, ?DimensionsDef>}
  * @private  Visible for testing only!
  */
 export const naturalDimensions_ = {
-  'AMP-PIXEL': {width: 1, height: 1},
+  'AMP-PIXEL': {width: '1px', height: '1px'},
+  'AMP-ANALYTICS': {width: '1px', height: '1px'},
+  // TODO(dvoytenko): audio should have width:auto.
   'AMP-AUDIO': null
 };
 
@@ -72,6 +77,7 @@ export const naturalDimensions_ = {
  */
 export const LOADING_ELEMENTS_ = {
   'AMP-ANIM': true,
+  'AMP-BRIGHTCOVE': true,
   'AMP-IFRAME': true,
   'AMP-IMG': true,
   'AMP-INSTAGRAM': true,
@@ -133,7 +139,7 @@ export function isInternalElement(tag) {
  * Parses the CSS length value. If no units specified, the assumed value is
  * "px". Returns undefined in case of parsing error.
  * @param {string|undefined} s
- * @return {!Length|undefined}
+ * @return {!LengthDef|undefined}
  */
 export function parseLength(s) {
   if (typeof s == 'number') {
@@ -154,8 +160,8 @@ export function parseLength(s) {
 
 /**
  * Asserts that the supplied value is a CSS Length value.
- * @param {!Length|string} length
- * @return {!Length}
+ * @param {!LengthDef|string} length
+ * @return {!LengthDef}
  */
 export function assertLength(length) {
   assert(/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax)$/.test(length),
@@ -166,7 +172,7 @@ export function assertLength(length) {
 
 /**
  * Returns units from the CSS length value.
- * @param {!Length} length
+ * @param {!LengthDef} length
  * @return {string}
  */
 export function getLengthUnits(length) {
@@ -179,7 +185,7 @@ export function getLengthUnits(length) {
 
 /**
  * Returns the numeric value of a CSS length value.
- * @param {!Length|string} length
+ * @param {!LengthDef|string} length
  * @return {number}
  */
 export function getLengthNumeral(length) {
@@ -191,7 +197,7 @@ export function getLengthNumeral(length) {
  * Determines whether the tagName is a known element that has natural dimensions
  * in our runtime or the browser.
  * @param {string} tagName The element tag name.
- * @return {Dimensions}
+ * @return {DimensionsDef}
  */
 export function hasNaturalDimensions(tagName) {
   tagName = tagName.toUpperCase();
@@ -202,11 +208,14 @@ export function hasNaturalDimensions(tagName) {
 /**
  * Determines the default dimensions for an element which could vary across
  * different browser implementations, like <audio> for instance.
+ * This operation can only be completed for an element whitelisted by
+ * `hasNaturalDimensions`.
  * @param {string} tagName The element tag name.
- * @return {Dimensions}
+ * @return {DimensionsDef}
  */
 export function getNaturalDimensions(tagName) {
   tagName = tagName.toUpperCase();
+  assert(naturalDimensions_[tagName] !== undefined);
   if (!naturalDimensions_[tagName]) {
     const naturalTagName = tagName.replace(/^AMP\-/, '');
     const temp = document.createElement(naturalTagName);
@@ -216,8 +225,8 @@ export function getNaturalDimensions(tagName) {
     temp.style.visibility = 'hidden';
     document.body.appendChild(temp);
     naturalDimensions_[tagName] = {
-      width: temp./*OK*/offsetWidth || 1,
-      height: temp./*OK*/offsetHeight || 1
+      width: (temp./*OK*/offsetWidth || 1) + 'px',
+      height: (temp./*OK*/offsetHeight || 1) + 'px'
     };
     document.body.removeChild(temp);
   }

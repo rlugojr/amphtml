@@ -104,7 +104,7 @@ i-amp-sizer {
 }
 
 .-amp-unresolved {
-  position: relative !important;
+  position: relative;
   overflow: hidden !important;
 }
 
@@ -116,7 +116,7 @@ i-amp-sizer {
 }
 
 .-amp-notbuilt {
-  position: relative !important;
+  position: relative;
   overflow: hidden !important;
   color: transparent !important;
 }
@@ -320,4 +320,26 @@ amp-ad iframe {
  */
 amp-instagram {
   padding: 48px 8px !important;
+}
+
+
+/**
+ * Analytics tags should never be visible. keep them hidden.
+ */
+amp-analytics {
+  position: absolute !important;
+  top: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  visibility: hidden;
+}
+
+
+/**
+ * Minimal AMP Access CSS. This part has to be here so that the correct UI
+ * can be provided before AMP Access JS has been loaded.
+ */
+[amp-access][amp-access-hide] {
+  display: none;
 }

@@ -19,11 +19,13 @@ import {BaseTemplate, registerExtendedTemplate} from './template';
 import {assert} from './asserts';
 import {getMode} from './mode';
 import {installStyles} from './styles';
+import {installCoreServices} from './amp-core-service';
 import {isExperimentOn, toggleExperiment} from './experiments';
 import {performanceFor} from './performance';
 import {registerElement} from './custom-element';
 import {registerExtendedElement} from './extended-element';
 import {resourcesFor} from './resources';
+import {timer} from './timer';
 import {viewerFor} from './viewer';
 import {viewportFor} from './viewport';
 
@@ -47,7 +49,9 @@ export function adopt(global) {
   // of functions
   const preregisteredElements = global.AMP || [];
 
-  global.AMP = {};
+  global.AMP = {
+    win: global
+  };
 
   /**
    * Registers an extended element and installs its styles.
@@ -90,6 +94,7 @@ export function adopt(global) {
   /** @const */
   global.AMP.assert = assert;
 
+  installCoreServices(global);
   const viewer = viewerFor(global);
 
   /** @const */
@@ -100,11 +105,13 @@ export function adopt(global) {
     global.AMP.toggleRuntime = viewer.toggleRuntime.bind(viewer);
     /** @const */
     global.AMP.resources = resourcesFor(global);
-    /** @const */
-    global.AMP.isExperimentOn = isExperimentOn.bind(null, global);
-    /** @const */
-    global.AMP.toggleExperiment = toggleExperiment.bind(null, global);
   }
+
+  // Experiments.
+  /** @const */
+  global.AMP.isExperimentOn = isExperimentOn.bind(null, global);
+  /** @const */
+  global.AMP.toggleExperiment = toggleExperiment.bind(null, global);
 
   const viewport = viewportFor(global);
 
@@ -137,7 +144,13 @@ export function adopt(global) {
   // Execute asynchronously scheduled elements.
   for (let i = 0; i < preregisteredElements.length; i++) {
     const fn = preregisteredElements[i];
-    fn(global.AMP);
+    try {
+      fn(global.AMP);
+    } catch (e) {
+      // Throw errors outside of loop in its own micro task to
+      // avoid on error stopping other extensions from loading.
+      timer.delay(() => {throw e;}, 1);
+    }
   }
 }
 

@@ -15,10 +15,15 @@
  */
 
 // This must load before all other tests.
+import '../third_party/babel/custom-babel-helpers';
 import '../src/polyfills';
 import {adopt} from '../src/runtime';
 
 adopt(global);
+
+// Make amp section in karma config readable by tests.
+global.ampTestRuntimeConfig = parent.karma.config.amp;
+
 
 // Hack for skipping tests on Travis that don't work there.
 // Get permission before use!
@@ -61,6 +66,8 @@ afterEach(() => {
     }
   }
   window.localStorage.clear();
+  window.ampExtendedElements = {};
+  window.ENABLE_LOG = false;
 });
 
 chai.Assertion.addMethod('attribute', function(attr) {

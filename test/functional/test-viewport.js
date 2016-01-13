@@ -16,7 +16,8 @@
 
 import {Viewport, ViewportBindingNatural_, ViewportBindingNaturalIosEmbed_,
           ViewportBindingVirtual_, parseViewportMeta, stringifyViewportMeta,
-          updateViewportMetaString} from '../../src/viewport';
+          updateViewportMetaString} from '../../src/service/viewport-impl';
+import {installViewerService} from '../../src/service/viewer-impl';
 import {getStyle} from '../../src/style';
 import * as sinon from 'sinon';
 
@@ -48,8 +49,12 @@ describe('Viewport', () => {
     windowApi = {
       document: {
         documentElement: {style: {}}
-      }
+      },
+      location: {},
+      setTimeout: window.setTimeout,
+      requestAnimationFrame: fn => window.setTimeout(fn, 16)
     };
+    installViewerService(windowApi);
     binding = new ViewportBindingVirtual_(windowApi, viewer);
     viewport = new Viewport(windowApi, binding, viewer);
     viewport.getSize();
@@ -132,44 +137,27 @@ describe('Viewport', () => {
     viewport.onChanged(event => {
       changeEvent = event;
     });
-    viewer.getScrollTop = () => {return 34;};
+    viewer.getScrollTop = () => 34;
     viewerViewportHandler();
     expect(changeEvent).to.equal(null);
 
     // Not enough time past.
-    clock.tick(100);
-    viewer.getScrollTop = () => {return 35;};
+    clock.tick(8);
+    expect(changeEvent).to.equal(null);
+    clock.tick(8);
+    expect(changeEvent).to.equal(null);
+    viewer.getScrollTop = () => 35;
     viewerViewportHandler();
+    clock.tick(16);
     expect(changeEvent).to.equal(null);
 
     // A bit more time.
-    clock.tick(750);
+    clock.tick(16);
+    expect(changeEvent).to.equal(null);
+    clock.tick(4);
     expect(changeEvent).to.not.equal(null);
     expect(changeEvent.relayoutAll).to.equal(false);
-    expect(changeEvent.velocity).to.be.closeTo(0.002, 1e-4);
-  });
-
-  it('should defer scroll events and react to reset of scroll pos', () => {
-    let changeEvent = null;
-    viewport.onChanged(event => {
-      changeEvent = event;
-    });
-    viewer.getScrollTop = () => {return 34;};
-    viewerViewportHandler();
-    expect(changeEvent).to.equal(null);
-
-    // Not enough time past.
-    clock.tick(100);
-    viewer.getScrollTop = () => {return 35;};
-    viewerViewportHandler();
-    expect(changeEvent).to.equal(null);
-
-    // Reset and wait a bit more time.
-    viewport./*OK*/scrollTop_ = null;
-    clock.tick(750);
-    expect(changeEvent).to.not.equal(null);
-    expect(changeEvent.relayoutAll).to.equal(false);
-    expect(changeEvent.velocity).to.equal(0);
+    expect(changeEvent.velocity).to.be.closeTo(0.019230, 1e-4);
   });
 
   it('should update scroll pos and reset cache', () => {
@@ -363,9 +351,10 @@ describe('Viewport META', () => {
             }
             return undefined;
           }
-        }
+        },
+        location: {}
       };
-
+      installViewerService(windowApi);
       binding = new ViewportBindingVirtual_(windowApi, viewer);
       viewport = new Viewport(windowApi, binding, viewer);
     });
@@ -803,7 +792,6 @@ describe('ViewportBindingVirtual', () => {
   let binding;
   let windowApi;
   let viewer;
-  let viewerMock;
 
   beforeEach(() => {
     sandbox = sinon.sandbox.create();
@@ -813,7 +801,7 @@ describe('ViewportBindingVirtual', () => {
       getScrollTop: () => 17,
       getPaddingTop: () => 19
     };
-    viewerMock = sandbox.mock(viewer);
+    sandbox.mock(viewer);
     windowApi = {
       document: {
         documentElement: {style: {}}

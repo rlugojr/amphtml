@@ -15,8 +15,8 @@
  */
 
 
-require('../src/polyfills');
 import {Timer} from '../src/timer';
+import {installCoreServices} from '../src/amp-core-service';
 import {registerForUnitTest} from '../src/runtime';
 
 let iframeCount = 0;
@@ -39,6 +39,8 @@ let iframeCount = 0;
  *
  * @param {string} fixture The name of the fixture file.
  * @param {number} initialIframeHeight in px.
+ * @param {function(!Window)} opt_beforeLoad Called just before any other JS
+ *     executes in the window.
  * @return {!Promise<{
  *   win: !Window,
  *   doc: !Document,
@@ -46,7 +48,7 @@ let iframeCount = 0;
  *   awaitEvent: function(string, number):!Promise
  * }>}
  */
-export function createFixtureIframe(fixture, initialIframeHeight, done) {
+export function createFixtureIframe(fixture, initialIframeHeight, opt_beforeLoad) {
   return new Promise((resolve, reject) => {
     // Counts the supported custom events.
     const events = {
@@ -59,7 +61,9 @@ export function createFixtureIframe(fixture, initialIframeHeight, done) {
     if (!html) {
       throw new Error('Cannot find fixture: ' + fixture);
     }
+    html = maybeSwitchToCompiledJs(html);
     let firstLoad = true;
+    window.ENABLE_LOG = true;
     // This global function will be called by the iframe immediately when it
     // starts loading. This appears to be the only way to get the correct
     // window object early enough to not miss any events that may get fired
@@ -67,6 +71,9 @@ export function createFixtureIframe(fixture, initialIframeHeight, done) {
     window.beforeLoad = function(win) {
       // Flag as being a test window.
       win.AMP_TEST = true;
+      if (opt_beforeLoad) {
+        opt_beforeLoad(win);
+      }
       // Function that returns a promise for when the given event fired at
       // least count times.
       let awaitEvent = (eventName, count) => {
@@ -99,6 +106,7 @@ export function createFixtureIframe(fixture, initialIframeHeight, done) {
       let errors = [];
       win.console.error = function() {
         errors.push('Error: ' + [].slice.call(arguments).join(' '));
+        console.error.apply(console, arguments);
       };
       // Make time go 10x as fast
       win.setTimeout = function(fn, ms) {
@@ -166,6 +174,7 @@ export function createIframePromise(opt_runtimeOff, opt_beforeLayoutCallback) {
       if (opt_runtimeOff) {
         iframe.contentWindow.name = '__AMP__off=1';
       }
+      installCoreServices(iframe.contentWindow);
       registerForUnitTest(iframe.contentWindow);
       resolve({
         win: iframe.contentWindow,
@@ -195,21 +204,46 @@ export function createIframePromise(opt_runtimeOff, opt_beforeLayoutCallback) {
   });
 }
 
+export function createServedIframe(src) {
+  return new Promise(function(resolve, reject) {
+    const iframe = document.createElement('iframe');
+    iframe.name = 'test_' + iframeCount++;
+    iframe.src = src;
+    iframe.onload = function() {
+      const win = iframe.contentWindow;
+      win.AMP_TEST = true;
+      installCoreServices(win);
+      registerForUnitTest(win);
+      resolve({
+        win: win,
+        doc: win.document,
+        iframe: iframe
+      });
+    };
+    iframe.onerror = reject;
+    document.body.appendChild(iframe);
+  });
+}
+
 /**
  * Returns a promise for when the condition becomes true.
  * @param {string} description
- * @param {fn():boolean} condition
+ * @param {fn():T} condition Should return a truthy value when the poll
+ *     is done. The return value is then returned with the promise
+ *     returned by this function.
  * @param {fn():!Error=} opt_onError
  * @param {number=} opt_timeout
- * @return {!Promise}
+ * @return {!Promise<T>} The polled for value.
+ * @template T
  */
 export function poll(description, condition, opt_onError, opt_timeout) {
   return new Promise((resolve, reject) => {
     let start = new Date().getTime();
     function poll() {
-      if (condition()) {
+      const ret = condition();
+      if (ret) {
         clearInterval(interval);
-        resolve();
+        resolve(ret);
       } else {
         if (new Date().getTime() - start > (opt_timeout || 1600)) {
           clearInterval(interval);
@@ -221,7 +255,7 @@ export function poll(description, condition, opt_onError, opt_timeout) {
         }
       }
     }
-    let interval = setInterval(poll, 50);
+    let interval = setInterval(poll, 8);
     poll();
   });
 }
@@ -255,6 +289,31 @@ export function pollForLayout(win, count, opt_timeout) {
  */
 export function expectBodyToBecomeVisible(win) {
   return poll('expect body to become visible', () => {
-    return win.document.body && win.document.body.style.opacity == '1';
+    return win.document.body && (
+        (win.document.body.style.visibility == 'visible'
+            && win.document.body.style.opacity != '0')
+        || win.document.body.style.opacity == '1');
   });
+}
+
+/**
+ * Takes a HTML document that is pointing to unminified JS and HTML
+ * binaries and massages the URLs to pointed to compiled binaries
+ * instead.
+ * @param {string} html
+ * @return {string}
+ */
+function maybeSwitchToCompiledJs(html) {
+  if (window.ampTestRuntimeConfig.useCompiledJs) {
+    return html
+        // Main JS
+        .replace(/\/dist\/amp\.js/, '/dist/v0.js')
+        // Extensions
+        .replace(/\.max\.js/g, '.js')
+        // 3p html binary
+        .replace(/\.max\.html/g, '.html')
+        // 3p path
+        .replace(/dist\.3p\/current\//g, 'dist.3p/current-min/');
+  }
+  return html;
 }

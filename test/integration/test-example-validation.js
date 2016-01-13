@@ -24,7 +24,7 @@ import {loadPromise} from '../../src/event-helper';
 if (!window.validatorLoad) {
   window.validatorLoad = (function() {
     const s = document.createElement('script');
-    s.src = 'https://www.gstatic.com/amphtml/v0/validator.js';
+    s.src = 'https://cdn.ampproject.org/v0/validator.js';
     document.body.appendChild(s);
     return loadPromise(s);
   })();
@@ -36,6 +36,7 @@ describe('example', function() {
 
   const examples = [
     'ads.amp.html',
+    'brightcove.amp.html',
     'metadata-examples/article-json-ld.amp.html',
     'metadata-examples/article-microdata.amp.html',
     'metadata-examples/recipe-json-ld.amp.html',
@@ -49,6 +50,7 @@ describe('example', function() {
     'instagram.amp.html',
     'released.amp.html',
     'twitter.amp.html',
+    'vine.amp.html',
   ];
 
   /**
@@ -60,12 +62,7 @@ describe('example', function() {
    * @constructor {!Array<!RegExp>}
    */
   const errorWhitelist = [
-    // TODO(dvoytenko): Remove once validator supports "data-videoid" for
-    // "amp-youtube" elements.
-    /MANDATORY_ATTR_MISSING video-id/,
-
-    // TODO(dvoytenko): Remove once validator supports "amp-font" element.
-    /DISALLOWED_TAG amp-font/,
+    /INVALID_ATTR_VALUE src=\.\/viewer-integr\.js/
   ];
 
   const usedWhitelist = [];

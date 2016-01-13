@@ -14,13 +14,17 @@
  * limitations under the License.
  */
 
-import {cidFor, getSourceOrigin, isProxyOrigin} from '../../src/cid';
+import {cidFor} from '../../src/cid';
+import {installCidService, getSourceOrigin, isProxyOrigin} from
+    '../../src/service/cid-impl';
 import {parseUrl} from '../../src/url';
 import {timer} from '../../src/timer';
+import {installViewerService} from '../../src/service/viewer-impl';
 import * as sinon from 'sinon';
 
 describe('cid', () => {
 
+  let isEmbedded;
   let sandbox;
   let clock;
   let fakeWin;
@@ -30,6 +34,7 @@ describe('cid', () => {
 
   beforeEach(() => {
     let call = 1;
+    isEmbedded = false;
     sandbox = sinon.sandbox.create();
     clock = sandbox.useFakeTimers();
     storage = {};
@@ -57,16 +62,29 @@ describe('cid', () => {
         }
       },
       document: {},
-    };
-    cid = cidFor(fakeWin);
-    cid.origSha384Base64_ = cid.sha384Base64_;
-    cid.sha384Base64_ = val => {
-      if (val instanceof Array) {
-        val = '[' + val + ']';
+      ampExtendedElements: {
+        'amp-analytics': true
       }
-
-      return 'sha384(' + val + ')';
     };
+    const viewer = installViewerService(fakeWin);
+    sandbox.stub(viewer, 'isEmbedded', function() {
+      return isEmbedded;
+    });
+    sandbox.stub(viewer, 'getBaseCid', function() {
+      return Promise.resolve('from-viewer');
+    });
+    installCidService(fakeWin);
+    return cidFor(fakeWin).then(c => {
+      cid = c;
+      cid.origSha384Base64_ = cid.sha384Base64_;
+      cid.sha384Base64_ = val => {
+        if (val instanceof Array) {
+          val = '[' + val + ']';
+        }
+
+        return 'sha384(' + val + ')';
+      };
+    });
   });
 
   afterEach(() => {
@@ -154,23 +172,48 @@ describe('cid', () => {
         'sha384(YYYhttp://www.origin.come2)');
   });
 
+  it('should retrieve cid from viewer if embedded', () => {
+    isEmbedded = true;
+    return compare(
+        'e2',
+        'sha384(from-viewerhttp://www.origin.come2)');
+  });
+
+  it('should prefer value in storage if present', () => {
+    isEmbedded = true;
+    storage['amp-cid'] = JSON.stringify({
+      cid: 'in-storage',
+      time: timer.now(),
+    });
+    return compare(
+        'e2',
+        'sha384(in-storagehttp://www.origin.come2)');
+  });
+
+
   it('should work without mocking', () => {
     const win = {
       location: {
         href: 'https://cdn.ampproject.org/v/www.origin.com/',
       },
       services: {},
+      ampExtendedElements: {
+        'amp-analytics': true
+      }
     };
     win.__proto__ = window;
     expect(win.location.href).to.equal('https://cdn.ampproject.org/v/www.origin.com/');
-    const cid = cidFor(win);
-    return cid.get('foo', hasConsent).then(c1 => {
-      return cid.get('foo', hasConsent).then(c2 => {
-        expect(c1).to.equal(c2);
-        window.localStorage.removeItem('amp-cid');
-        removeMemoryCacheOfCid(cid);
-        return cid.get('foo', hasConsent).then(c3 => {
-          expect(c1).to.not.equal(c3);
+    installViewerService(win).isEmbedded = () => false;
+    installCidService(win);
+    return cidFor(win).then(cid => {
+      return cid.get('foo', hasConsent).then(c1 => {
+        return cid.get('foo', hasConsent).then(c2 => {
+          expect(c1).to.equal(c2);
+          window.localStorage.removeItem('amp-cid');
+          removeMemoryCacheOfCid(cid);
+          return cid.get('foo', hasConsent).then(c3 => {
+            expect(c1).to.not.equal(c3);
+          });
         });
       });
     });
@@ -222,7 +265,7 @@ describe('cid', () => {
     const consent = timer.promise(100).then(() => {
       nonce = 'timer fired';
     });
-    const p = cid.get('', consent).then(c => {
+    const p = cid.get('test', consent).then(unusedC => {
       expect(nonce).to.equal('timer fired');
     });
     clock.tick(100);
@@ -231,6 +274,12 @@ describe('cid', () => {
 
   it('should fail on failed consent', () => {
     return expect(cid.get('abc', Promise.reject())).to.be.rejected;
+  });
+
+  it('should fail on invalid scope', () => {
+    expect(() => {
+      cid.get('$$$', Promise.resolve());
+    }).to.throw(/\$\$\$/);
   });
 
   it('should not store until persistence promise resolves', () => {
@@ -270,6 +319,38 @@ describe('cid', () => {
         'e2',
         'sha384(sha384(https://cdn.ampproject.org/v' +
         '/www.origin.com/foo/?f=07777999111222)http://www.origin.come2)');
+  });
+
+  it('should NOT create fallback cookie by default with string scope', () => {
+    fakeWin.location.href =
+        'https://abc.org/v/www.DIFFERENT.com/foo/?f=0';
+    return cid.get('cookie_name', hasConsent).then(c => {
+      expect(c).to.not.exist;
+      expect(fakeWin.document.cookie).to.not.exist;
+    });
+  });
+
+  it('should NOT create fallback cookie by default with struct scope', () => {
+    fakeWin.location.href =
+        'https://abc.org/v/www.DIFFERENT.com/foo/?f=0';
+    return cid.get({scope: 'cookie_name'}, hasConsent).then(c => {
+      expect(c).to.not.exist;
+      expect(fakeWin.document.cookie).to.not.exist;
+    });
+  });
+
+  it('should create fallback cookie when asked', () => {
+    fakeWin.location.href =
+        'https://abc.org/v/www.DIFFERENT.com/foo/?f=0';
+    return cid.get({scope: 'cookie_name', createCookieIfNotPresent: true},
+        hasConsent).then(c => {
+          expect(c).to.exist;
+          expect(c).to.equal('amp-sha384([1,2,3,0,0,0,0,0,0,0,0,0,0,0,0,15])');
+          expect(fakeWin.document.cookie).to.equal(
+              'cookie_name=' + encodeURIComponent(c) +
+              '; path=/' +
+              '; expires=Fri, 01 Jan 1971 00:00:00 GMT');  // 1 year from 0.
+        });
   });
 
   function compare(externalCidScope, compareValue) {
@@ -331,7 +412,11 @@ describe('isProxyOrigin', () => {
   testProxyOrigin(
       'https://cdn.ampproject.org/v/www.origin.com/foo/?f=0', true);
   testProxyOrigin(
-      'http://localhost:123', true);
+      'http://localhost:123', false);
+  testProxyOrigin(
+      'http://localhost:123/c', true);
+  testProxyOrigin(
+      'http://localhost:123/v', true);
   testProxyOrigin(
       'https://cdn.ampproject.net/v/www.origin.com/foo/?f=0', false);
   testProxyOrigin(

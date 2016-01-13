@@ -16,9 +16,10 @@
 
 import {addDataAndJsonAttributes_, getIframe, getBootstrapBaseUrl,
     prefetchBootstrap} from '../../src/3p-frame';
+import {validateData} from '../../src/3p';
 import {documentInfoFor} from '../../src/document-info';
 import {loadPromise} from '../../src/event-helper';
-import {setModeForTesting, getMode} from '../../src/mode';
+import {setModeForTesting} from '../../src/mode';
 import {resetServiceForTesting} from '../../src/service';
 
 describe('3p-frame', () => {
@@ -120,11 +121,13 @@ describe('3p-frame', () => {
       expect(win.context.pageViewId).to.equal(docInfo.pageViewId);
       expect(win.context.referrer).to.equal(referrer);
       expect(win.context.data.testAttr).to.equal('value');
-      expect(win.context.noContentAvailable).to.be.function;
-      expect(win.context.observeIntersection).to.be.function;
+      expect(win.context.noContentAvailable).to.be.a('function');
+      expect(win.context.observeIntersection).to.be.a('function');
+      expect(win.context.reportRenderedEntityIdentifier).to.be.a('function');
       const c = win.document.getElementById('c');
       expect(c).to.not.be.null;
       expect(c.textContent).to.contain('pong');
+      validateData(win.context.data, ['ping', 'testAttr']);
     });
   });
 

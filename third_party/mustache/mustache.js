@@ -42,7 +42,8 @@
    * including its prototype, has a given property
    */
   function hasProperty (obj, propName) {
-    return obj != null && typeof obj === 'object' && (propName in obj);
+    return obj != null && typeof obj === 'object' &&
+        Object.prototype.hasOwnProperty.call(obj, propName);
   }
 
   // Workaround for https://issues.apache.org/jira/browse/COUCHDB-577
@@ -63,11 +64,13 @@
     '>': '&gt;',
     '"': '&quot;',
     "'": '&#39;',
-    '/': '&#x2F;'
+    '/': '&#x2F;',
+    '`': '&#x60;',
+    '=': '&#x3D;'
   };
 
   function escapeHtml (string) {
-    return String(string).replace(/[&<>"'\/]/g, function fromEntityMap (s) {
+    return String(string).replace(/[&<>"'`=\/]/g, function fromEntityMap (s) {
       return entityMap[s];
     });
   }
@@ -213,7 +216,10 @@
         nonSpace = true;
       } else if (type === '=') {
         // Set the tags for the next time around.
-        compileTags(value);
+        // ORIGINAL CODE: compileTags(value);
+        // Fail quitely but do not allow delimiter substitutions. This is
+        // important from the security point of view so that our validators
+        // do not have to parse and interprete all of the mustache's syntax.
       }
     }
 
@@ -395,14 +401,21 @@
            * `undefined` and we want to avoid looking up parent contexts.
            **/
           while (value != null && index < names.length) {
+            if (!hasProperty(value, names[index])) {
+              value = null;
+              break;
+            }
             if (index === names.length - 1)
-              lookupHit = hasProperty(value, names[index]);
-
+              lookupHit = true;
             value = value[names[index++]];
           }
         } else {
-          value = context.view[name];
-          lookupHit = hasProperty(context.view, name);
+          if (!hasProperty(context.view, name)) {
+            value = null;
+          } else {
+            value = context.view[name];
+            lookupHit = true;
+          }
         }
 
         if (lookupHit)

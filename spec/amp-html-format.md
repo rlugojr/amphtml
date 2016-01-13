@@ -30,7 +30,7 @@ Also, AMP HTML documents can be uploaded to a web server and served just like an
 
 AMP HTML uses a set of contributed but centrally managed and hosted custom elements to implement advanced functionality such as image galleries that might be found in an AMP HTML document. While it does allow styling the document using custom CSS, it does not allow author written JavaScript beyond what is provided through the custom elements to reach its performance goals.
 
-By using this AMP format, content producers are making the content in AMP files available to be crawled, cached, and displayed by third parties.
+By using the AMP format, content producers are making the content in AMP files available to be crawled (subject to robots.txt restrictions), cached, and displayed by third parties.
 
 ## Performance
 
@@ -98,7 +98,7 @@ AMP HTML documents MUST
 - <a name="chrs"></a>contain a `<meta charset="utf-8">` tag as the first child of their head tag. [🔗](#chrs)
 - <a name="vprt"></a>contain a `<meta name="viewport" content="width=device-width,minimum-scale=1">` tag inside their head tag. It's also recommend to include `initial-scale=1` (1). [🔗](#vprt)
 - <a name="scrpt"></a>contain a `<script async src="https://cdn.ampproject.org/v0.js"></script>` tag inside their head tag. [🔗](#scrpt)
-- <a name="opacity"></a>contain `<style>body {opacity: 0}</style><noscript><style>body {opacity: 1}</style></noscript>` in their head tag. [🔗](#opacity)
+- <a name="opacity"></a><a name="boilerplate"></a>contain `<style>body {opacity: 0}</style><noscript><style>body {opacity: 1}</style></noscript>` in their head tag. [🔗](#boilerplate)
 
 (1) `width=device-width,minimum-scale=1` is required to ensure [GPU rasterization](https://www.chromium.org/developers/design-documents/chromium-graphics/how-to-get-gpu-rasterization) is enabled.
 
@@ -159,7 +159,7 @@ Major semantic tags and the AMP custom elements come with default styles to make
 
 The following @-rules are allowed in stylesheets:
 
-`@font-face`, `@keyframes`, `@media`.
+`@font-face`, `@keyframes`, `@media`, `@supports`.
 
 `@import` will not be allowed. Other may be added in the future.
 
@@ -226,7 +226,10 @@ Example:
 
 Font providers can be whitelisted if they support CSS-only integrations and serve over HTTPS. The following origins are currently allowed for font serving via link tags:
 
+- https://fast.fonts.net
 - https://fonts.googleapis.com
+
+IMPLEMENTERS NOTE: Adding to this list requires a change to the AMP CDN CSP rule.
 
 Authors are free to include all custom fonts via a `@font-face` CSS instruction via their custom CSS. Fonts included via `@font-face` must be fetched via the HTTP or HTTPS scheme.
 
@@ -240,13 +243,8 @@ The AMP runtime is loaded via the mandatory `<script src="https://cdn.ampproject
 The AMP runtime can be placed into a development mode for any page. Development
 mode will trigger AMP validation on the embedded page, which will emit the
 validation status and any errors to the javascript developer console.
-
-Development mode may be triggered in either of these ways:
-
- - Appending `#development=1` to the URL of the page.
- - Adding the `development` attribute to the AMP runtime script tag, e.g. `<script src="https://cdn.ampproject.org/v0.js" development></script>`.
-
-The latter approach of triggering development mode with a `development` attribute causes the validator to emit a warning to the javascript developer console which will read `DEV_MODE_ENABLED development - please remove for prod`. This warning becomes an error in a production environment and causes validation to fail for performance reasons. The `development` attribute thus should not be used publicly, and is provided primarily for use with toolchains.
+Development mode may be triggered by appending `#development=1` to the URL of
+the page.
 
 
 ## Resources
@@ -306,7 +304,7 @@ The `<script>` tag must have an `async` attribute and must have a `custom-elemen
 
 Runtime implementations may use the name to render placeholders for these elements.
 
-The script URL must start with “https://cdn.ampproject.org” and must follow a very strict pattern of “/v\d+/[a-z-]+-(latest|\d+|\d+-\d+)\.js”
+The script URL must start with “https://cdn.ampproject.org” and must follow a very strict pattern of `/v\d+/[a-z-]+-(latest|\d+|\d+.\d+).js`.
 
 ##### URL
 
@@ -339,7 +337,7 @@ Extended components are loaded by including a `<script>` tag in the head of the 
 
 The `<script>` tag must have an `async` attribute and must have a `custom-template` attribute referencing the type of the
 template. The script URL must start with “https://cdn.ampproject.org” and must follow a very strict pattern of
-“/v\d+/[a-z-]+-(latest|\d+|\d+-\d+)\.js”
+`/v\d+/[a-z-]+-(latest|\d+|\d+.\d+).js`.
 
 The templates are declared in the document as following:
 
@@ -397,3 +395,17 @@ As well as these attributes:
 
 * "xlink:href": only URIs starting with "#" are allowed
 * "style"
+
+## AMP document discovery
+
+If AMP documents are alternative representations of a canonical document, then the canonical document should point to the AMP document via a `link` tag with the [relation "amphtml"](http://microformats.org/wiki/existing-rel-values#HTML5_link_type_extensions).
+
+Example:
+
+```html
+<link rel="amphtml" href="https://www.example.com/url/to/amp/document.html">
+```
+
+The AMP document itself is expected to point back with its canonical relation to a document that has the "amphtml" relation.
+
+Note, that AMP document may also be linked to directly. The mechanism described here provides a standardized way for software to discover whether an AMP version exists for a canonical document.

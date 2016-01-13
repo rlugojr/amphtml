@@ -15,7 +15,6 @@
  */
 
 import {Layout} from './layout';
-import {assert} from './asserts';
 import {preconnectFor} from './preconnect';
 import {resourcesFor} from './resources';
 import {viewerFor} from './viewer';
@@ -60,6 +59,7 @@ import {vsyncFor} from './vsync';
  *           ||
  *           || buildCallback
  *           || preconnectCallback may be called N times after this.
+ *           || documentInactiveCallback may be called N times after this.
  *           ||
  *           \/
  *    State: <BUILT>
@@ -81,6 +81,10 @@ import {vsyncFor} from './vsync';
  * to preconnect to hosts needed by an element. It will never be called
  * before buildCallback and it might be called multiple times including
  * after layoutCallback.
+ *
+ * The documentInactiveCallback is called when the document becomes
+ * inactive. E.g. when the user swipes away from the document or
+ * focuses a different tab.
  *
  * Additionally whenever the dimensions of an element might have changed
  * AMP remeasures its dimensions and calls `onLayoutMeasure` on the
@@ -292,9 +296,9 @@ export class BaseElement {
   /**
    * Instructs the resource that it has either entered or exited the visible
    * viewport. Intended to be implemented by actual components.
-   * @param {boolean} inViewport
+   * @param {boolean} unusedInViewport
    */
-  viewportCallback(inViewport) {
+  viewportCallback(unusedInViewport) {
   }
 
   /**
@@ -312,9 +316,9 @@ export class BaseElement {
   /**
    * Instructs the element that its activation is requested based on some
    * user event. Intended to be implemented by actual components.
-   * @param {!ActionInvocation} invocation
+   * @param {!ActionInvocation} unusedInvocation
    */
-  activate(invocation) {
+  activate(unusedInvocation) {
   }
 
   /**
@@ -332,12 +336,12 @@ export class BaseElement {
    * been previously registered using {@link registerAction}, otherwise an
    * error is thrown.
    * @param {!ActionInvocation} invocation The invocation data.
-   * @param {boolean} deferred Whether the invocation has had to wait any time
+   * @param {boolean} unusedDeferred Whether the invocation has had to wait any time
    *   for the element to be resolved, upgraded and built.
    * @final
    * @package
    */
-  executeAction(invocation, deferred) {
+  executeAction(invocation, unusedDeferred) {
     if (invocation.method == 'activate') {
       this.activate(invocation);
     } else {
@@ -516,11 +520,13 @@ export class BaseElement {
    * Requests the runtime to update the height of this element to the specified
    * value. The runtime will schedule this request and attempt to process it
    * as soon as possible.
+   * When the height is successfully updated then the opt_callback is called.
    * @param {number} newHeight
+   * @param {function=} opt_callback A callback function.
    * @protected
    */
-  changeHeight(newHeight) {
-    this.resources_./*OK*/changeHeight(this.element, newHeight);
+  changeHeight(newHeight, opt_callback) {
+    this.resources_./*OK*/changeHeight(this.element, newHeight, opt_callback);
   }
 
   /**
@@ -529,12 +535,15 @@ export class BaseElement {
    * as soon as possible. However, unlike in {@link changeHeight}, the runtime
    * may refuse to make a change in which case it will show the element's
    * overflow element if provided, which is supposed to provide the reader with
-   * the necessary user action.
+   * the necessary user action. (The overflow element is shown only if the
+   * requested height is greater than 0.)
+   * If the height is successfully updated then the opt_callback is called.
    * @param {number} newHeight
+   * @param {function=} opt_callback A callback function.
    * @protected
    */
-  requestChangeHeight(newHeight) {
-    this.resources_.requestChangeHeight(this.element, newHeight);
+  attemptChangeHeight(newHeight, opt_callback) {
+    this.resources_.attemptChangeHeight(this.element, newHeight, opt_callback);
   }
 
   /**

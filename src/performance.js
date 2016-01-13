@@ -33,7 +33,7 @@ const QUEUE_LIMIT_ = 50;
  *   opt_value: (number|undefined)
  * }}
  */
-class TickEvent {}
+class TickEventDef {}
 
 
 /**
@@ -56,7 +56,7 @@ export class Performance {
     /** @const @private {funtion()|undefined} */
     this.flush_;
 
-    /** @const @private {!Array<TickEvent>} */
+    /** @const @private {!Array<TickEventDef>} */
     this.events_ = [];
   }
 
@@ -150,6 +150,10 @@ export class Performance {
     this.tick_ = tick;
     this.flush_ = opt_flush;
     this.flushQueuedTicks_();
+    // We need to call flush right away in case `setTickFunction` is called
+    // later than the amp codebase had invoked the performance services'
+    // `flush` method to forward ticks.
+    this.flush();
   }
 }
 
