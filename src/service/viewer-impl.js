@@ -134,6 +134,9 @@ export class Viewer {
     /** @private {!Observable<!ViewerHistoryPoppedEventDef>} */
     this.historyPoppedObservable_ = new Observable();
 
+    /** @private {!Observable<!JSONObject>} */
+    this.broadcastObservable_ = new Observable();
+
     /** @private {?function(string, *, boolean):(Promise<*>|undefined)} */
     this.messageDeliverer_ = null;
 
@@ -144,11 +147,16 @@ export class Viewer {
     this.params_ = {};
 
     /** @private {?function()} */
-    this.whenVisibleResolve_ = null;
+    this.whenFirstVisibleResolve_ = null;
 
-    /** @private @const {!Promise} */
-    this.whenVisiblePromise_ = new Promise(resolve => {
-      this.whenVisibleResolve_ = resolve;
+    /**
+     * This promise might be resolved right away if the current
+     * document is already visible. See end of this constructor where we call
+     * `this.onVisibilityChange_()`.
+     * @private @const {!Promise}
+     */
+    this.whenFirstVisiblePromise_ = new Promise(resolve => {
+      this.whenFirstVisibleResolve_ = resolve;
     });
 
     // Params can be passed either via iframe name or via hash. Hash currently
@@ -201,6 +209,9 @@ export class Viewer {
         this.paddingTop_;
     log.fine(TAG_, '- padding-top:', this.paddingTop_);
 
+    /** @private {boolean} */
+    this.hasBeenVisible_ = this.isVisible();
+
     // Wait for document to become visible.
     this.docState_.onVisibilityChanged(this.onVisibilityChange_.bind(this));
 
@@ -227,7 +238,8 @@ export class Viewer {
    */
   onVisibilityChange_() {
     if (this.isVisible()) {
-      this.whenVisibleResolve_();
+      this.hasBeenVisible_ = true;
+      this.whenFirstVisibleResolve_();
     }
     this.visibilityObservable_.fire();
   }
@@ -305,13 +317,23 @@ export class Viewer {
         !this.docState_.isHidden();
   }
 
+  /**
+   * Whether the AMP document has been ever visible before. Since the visiblity
+   * state of a document can be flipped back and forth we sometimes want to know
+   * if a document has ever been visible.
+   * @return {boolean}
+   */
+  hasBeenVisible() {
+    return this.hasBeenVisible_;
+  }
+
  /**
   * Returns a Promise that only ever resolved when the current
   * AMP document becomes visible.
   * @return {!Promise}
   */
-  whenVisible() {
-    return this.whenVisiblePromise_;
+  whenFirstVisible() {
+    return this.whenFirstVisiblePromise_;
   }
 
   /**
@@ -461,12 +483,28 @@ export class Viewer {
   }
 
   /**
+   * Broadcasts a message to all other AMP documents under the same viewer.
+   * @param {!JSONObject} message
+   */
+  broadcast(message) {
+    this.sendMessage_('broadcast', message, false);
+  }
+
+  /**
+   * Registers receiver for the broadcast events.
+   * @param {function(!JSONObject)} handler
+   * @return {!Unlisten}
+   */
+  onBroadcast(handler) {
+    return this.broadcastObservable_.add(handler);
+  }
+
+  /**
    * Requests AMP document to receive a message from Viewer.
    * @param {string} eventType
    * @param {*} data
    * @param {boolean} unusedAwaitResponse
    * @return {(!Promise<*>|undefined)}
-   * @package
    * @export
    */
   receiveMessage(eventType, data, unusedAwaitResponse) {
@@ -504,6 +542,10 @@ export class Viewer {
       this.onVisibilityChange_();
       return Promise.resolve();
     }
+    if (eventType == 'broadcast') {
+      this.broadcastObservable_.fire(data);
+      return Promise.resolve();
+    }
     log.fine(TAG_, 'unknown message:', eventType);
     return undefined;
   }
@@ -512,7 +554,6 @@ export class Viewer {
    * Provides a message delivery mechanism by which AMP document can send
    * messages to the viewer.
    * @param {function(string, *, boolean):(!Promise<*>|undefined)} deliverer
-   * @package
    * @export
    */
   setMessageDeliverer(deliverer) {

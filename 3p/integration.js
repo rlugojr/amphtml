@@ -28,6 +28,7 @@ import {adreactor} from '../ads/adreactor';
 import {adsense} from '../ads/adsense';
 import {adtech} from '../ads/adtech';
 import {doubleclick} from '../ads/doubleclick';
+import {facebook} from './facebook';
 import {twitter} from './twitter';
 import {register, run} from '../src/3p';
 import {parseUrl} from '../src/url';
@@ -42,6 +43,7 @@ register('_ping_', function(win, data) {
   win.document.getElementById('c').textContent = data.ping;
 });
 register('twitter', twitter);
+register('facebook', facebook);
 
 /**
  * Visible for testing.
@@ -112,12 +114,14 @@ window.draw3p = function(opt_configCallback) {
   window.context.isMaster = window.context.master == window;
   window.context.data = data;
   window.context.noContentAvailable = triggerNoContentAvailable;
-  if (data.type == 'twitter') {
-    // Only make this available to Twitter for now while
-    // https://github.com/ampproject/amphtml/issues/728
-    // is being implemented.
+  window.context.resize = triggerResizeRequest;
+
+  if (data.type === 'facebook' || data.type === 'twitter') {
+    // Only make this available to selected embeds until the generic solution is
+    // available.
     window.context.updateDimensions = triggerDimensions;
   }
+
   // This only actually works for ads.
   window.context.observeIntersection = observeIntersection;
   window.context.reportRenderedEntityIdentifier =
@@ -134,6 +138,13 @@ function triggerDimensions(width, height) {
   nonSensitiveDataPostMessage('embed-size', {
     width: width,
     height: height,
+  });
+}
+
+function triggerResizeRequest(width, height) {
+  nonSensitiveDataPostMessage('embed-size', {
+    width: width,
+    height: height
   });
 }
 
@@ -155,11 +166,11 @@ function nonSensitiveDataPostMessage(type, opt_object) {
  * the IntersectionObserver spec callback.
  * http://rawgit.com/slightlyoff/IntersectionObserver/master/index.html#callbackdef-intersectionobservercallback
  * @param {function(!Array<IntersectionObserverEntry>)} observerCallback
+ * @returns {!function} A function which removes the event listener that
+ *    observes for intersection messages.
  */
 function observeIntersection(observerCallback) {
-  // Send request to received records.
-  nonSensitiveDataPostMessage('send-intersections');
-  window.addEventListener('message', function(event) {
+  function listener(event) {
     if (event.source != window.parent ||
         event.origin != window.context.location.origin ||
         !event.data ||
@@ -168,7 +179,13 @@ function observeIntersection(observerCallback) {
       return;
     }
     observerCallback(event.data.changes);
-  });
+  }
+  // Send request to received records.
+  nonSensitiveDataPostMessage('send-intersections');
+  window.addEventListener('message', listener);
+  return function() {
+    window.removeEventListener('message', listener);
+  };
 }
 
 /**

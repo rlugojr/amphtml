@@ -62,6 +62,25 @@ Most ad networks require further configuration. This can be passed to the networ
 
 Optional attribute to pass configuration to the ad as an arbitrarily complex JSON object. The object is passed to the ad as-is with no mangling done on the names.
 
+#### Ad Resizing
+
+An `amp-ad` must have static layout defined as is the case with any other AMP element. However,
+it's possible to resize an `amp-ad` in runtime. To do so:
+
+1. The `amp-ad` must be defined with `resizable` attribute;
+2. The `amp-ad` must have `overflow` child element;
+3. The Ad's Iframe document has to send a `embed-size` request as a window message.
+
+Notice that `resizable` overrides `scrolling` value to `no`.
+
+Example of `amp-ad` with `overflow` element:
+```html
+<amp-ad width=300 height=300
+    type="foo"
+    resizable>
+  <div overflow tabindex=0 role=button aria-label="Expand!">Expand!</div>
+</amp-ad>
+
 #### Placeholder
 
 Optionally `amp-ad` supports a child element with the `placeholder` attribute. If supported by the ad network, this element is shown until the ad is available for viewing.
@@ -102,7 +121,7 @@ To enable this, copy the file [remote.html](../3p/remote.html) to your web serve
 <meta name="amp-3p-iframe-src" content="https://assets.your-domain.com/path/to/remote.html">
 ```
 
-The `content` attribute of the meta tag is the absolute URL to your copy of the remote.html file on your web server. This URL must use a "https" schema. It is not allowed to reside on the same origin as your AMP files. E.g. if you host AMP files on "www.example.com", this URL must not be on "www.example.com" but e.g. "something-else.example.com" is OK. The reason for this limitation is that AMP documents may be served by AMP caches on different origins. If the iframe is never on the same origin as the parent frame, it becomes less likely that one accidentally deploys code that relies on them being same origin, which would break in the 'AMP cache" scenario.
+The `content` attribute of the meta tag is the absolute URL to your copy of the remote.html file on your web server. This URL must use a "https" schema. It is not allowed to reside on the same origin as your AMP files. E.g. if you host AMP files on "www.example.com", this URL must not be on "www.example.com" but e.g. "something-else.example.com" is OK. See the doc ["Iframe origin policy"](../spec/amp-iframe-origin-policy.md) for further details on allowed origins for iframes.
 
 ##### Enhance incoming ad configuration
 

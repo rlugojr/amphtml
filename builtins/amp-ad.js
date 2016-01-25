@@ -15,14 +15,15 @@
  */
 
 import {BaseElement} from '../src/base-element';
-import {assert} from '../src/asserts';
-import {getIntersectionChangeEntry} from '../src/intersection-observer';
-import {isLayoutSizeDefined} from '../src/layout';
-import {loadPromise} from '../src/event-helper';
-import {registerElement} from '../src/custom-element';
-import {getIframe, listen, listenOnce, postMessage, prefetchBootstrap} from
-    '../src/3p-frame';
 import {adPrefetch, adPreconnect} from '../ads/_prefetch';
+import {assert} from '../src/asserts';
+import {getIframe, prefetchBootstrap} from '../src/3p-frame';
+import {IntersectionObserver} from '../src/intersection-observer';
+import {isLayoutSizeDefined} from '../src/layout';
+import {listen, listenOnce} from '../src/iframe-helper';
+import {loadPromise} from '../src/event-helper';
+import {log} from '../src/log';
+import {registerElement} from '../src/custom-element';
 import {timer} from '../src/timer';
 
 
@@ -31,6 +32,8 @@ const POSITION_FIXED_TAG_WHITELIST = {
   'AMP-LIGHTBOX': true
 };
 
+/** @const {string} */
+const TAG_ = 'AmpAd';
 
 /**
  * @param {!Window} win Destination window for the new element.
@@ -108,8 +111,11 @@ export function installAd(win) {
        */
       this.unlistenViewportChanges_ = null;
 
-      /** @private {boolean} */
-      this.shouldSendIntersectionChanges_ = false;
+      /** @private {IntersectionObserver} */
+      this.intersectionObserver_ = null;
+
+      /** @private @const {boolean} */
+      this.isResizable_ = this.element.hasAttribute('resizable');
     }
 
     /**
@@ -156,7 +162,9 @@ export function installAd(win) {
       // When the framework has the need to remeasure us, our position might
       // have changed. Send an intersection record if needed. This does nothing
       // if we aren't currently in view.
-      this.sendAdIntersection_();
+      if (this.intersectionObserver_) {
+        this.intersectionObserver_.fire();
+      }
     }
 
     /**
@@ -168,6 +176,16 @@ export function installAd(win) {
         this.iframeLayoutBox_ =
             this.getViewport().getLayoutRect(this.iframe_);
       }
+    }
+
+    /**
+     * @override
+     */
+    getInsersectionElementLayoutBox() {
+      if (!this.iframeLayoutBox_) {
+        this.measureIframeLayoutBox_();
+      }
+      return this.iframeLayoutBox_;
     }
 
     /**
@@ -205,92 +223,65 @@ export function installAd(win) {
       assert(!this.isInFixedContainer_,
           '<amp-ad> is not allowed to be placed in elements with ' +
           'position:fixed: %s', this.element);
+      if (this.isResizable_) {
+        this.element.setAttribute('scrolling', 'no');
+        assert(this.getOverflowElement(),
+            'Overflow element must be defined for resizable ads: %s',
+            this.element);
+      }
       if (!this.iframe_) {
         this.iframe_ = getIframe(this.element.ownerDocument.defaultView,
             this.element);
         this.applyFillContent(this.iframe_);
         this.element.appendChild(this.iframe_);
-
+        this.intersectionObserver_ =
+            new IntersectionObserver(this, this.iframe_, /* opt_is3P */true);
         // Triggered by context.noContentAvailable() inside the ad iframe.
         listenOnce(this.iframe_, 'no-content', () => {
           this.noContentHandler_();
-        });
+        }, /* opt_is3P */ true);
         // Triggered by context.reportRenderedEntityIdentifier(…) inside the ad
         // iframe.
         listenOnce(this.iframe_, 'entity-id', info => {
           this.element.setAttribute('creative-id', info.id);
-        });
-        // Triggered by context.observeIntersection(…) inside the ad iframe.
-        // We use listen instead of listenOnce, because a single ad might
-        // have multiple parties wanting to receive viewability data.
-        // The second time this is called, it doesn't do much but it
-        // guarantees that the receiver gets an initial intersection change
-        // record.
-        listen(this.iframe_, 'send-intersections', () => {
-          this.startSendingIntersectionChanges_();
-        });
+        }, /* opt_is3P */ true);
+        listen(this.iframe_, 'embed-size', data => {
+          if (data.width !== undefined) {
+            this.iframe_.width = data.width;
+            this.element.setAttribute('width', data.width);
+          }
+          if (data.height !== undefined) {
+            const newHeight = Math.max(this.element./*OK*/offsetHeight +
+                data.height - this.iframe_./*OK*/offsetHeight, data.height);
+            this.iframe_.height = data.height;
+            this.element.setAttribute('height', newHeight);
+            this.updateHeight_(newHeight);
+          }
+        }, /* opt_is3P */ true);
       }
       return loadPromise(this.iframe_);
     }
 
     /** @override  */
     viewportCallback(inViewport) {
-      // Lets the ad know that it became visible or no longer is.
-      this.sendAdIntersection_();
-      // And update the ad about its position in the viewport while
-      // it is visible.
-      if (inViewport) {
-        const send = this.sendAdIntersection_.bind(this);
-        // Scroll events.
-        const unlistenScroll = this.getViewport().onScroll(send);
-        // Throttled scroll events. Also fires for resize events.
-        const unlistenChanged = this.getViewport().onChanged(send);
-        this.unlistenViewportChanges_ = () => {
-          unlistenScroll();
-          unlistenChanged();
-        };
-      } else if (this.unlistenViewportChanges_) {
-        this.unlistenViewportChanges_();
-        this.unlistenViewportChanges_ = null;
+      if (this.intersectionObserver_) {
+        this.intersectionObserver_.onViewportCallback(inViewport);
       }
     }
 
     /**
-     * Called via postMessage from the child iframe when the ad starts
-     * observing its position in the viewport.
-     * Sets a flag, measures the iframe position if necessary and sends
-     * one change record to the iframe.
-     * Note that this method may be called more than once if a single ad
-     * has multiple parties interested in viewability data.
+     * Updates the elements height to accommodate the iframe's requested height.
+     * @param {number} newHeight
      * @private
      */
-    startSendingIntersectionChanges_() {
-      this.shouldSendIntersectionChanges_ = true;
-      this.getVsync().measure(() => {
-        if (!this.iframeLayoutBox_) {
-          this.measureIframeLayoutBox_();
-        }
-        this.sendAdIntersection_();
-      });
-    }
-
-    /**
-     * Sends 'intersection' message to ad with intersection change records
-     * if this has been activated and we measured the layout box of the iframe
-     * at least once.
-     * @private
-     */
-    sendAdIntersection_() {
-      if (!this.shouldSendIntersectionChanges_ ||
-          !this.iframeLayoutBox_) {
+    updateHeight_(newHeight) {
+      if (!this.isResizable_) {
+        log.warn(TAG_,
+            'ignoring embed-size request because this ad is not resizable',
+            this.element);
         return;
       }
-      const rootBounds = this.getViewport().getRect();
-      const change = getIntersectionChangeEntry(
-          timer.now(),
-          rootBounds,
-          this.iframeLayoutBox_);
-      postMessage(this.iframe_, 'intersection', {changes: [change]});
+      this.attemptChangeHeight(newHeight);
     }
 
     /**

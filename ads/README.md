@@ -60,6 +60,48 @@ Example usage:
   });
 ```
 
+`window.context.observeIntersection` returns a function which when called will stop listening for intersection messages.
+
+Example usage:
+
+```js
+  var unlisten = window.context.observeIntersection(function(changes) {
+    changes.forEach(function(c) {
+      console.info('Height of intersection', c.intersectionRect.height);
+    });
+  });
+
+  // condition to stop listening to intersection messages.
+  unlisten();
+```
+
+### Ad resizing
+
+Ads can call the special API
+`window.context.resize(width, height)` to send a resize request.
+
+Example of resize request:
+```javascript
+window.parent.postMessage({
+  sentinel: 'amp-3p',
+  type: 'embed-size',
+  height: document.body.scrollHeight
+}, '*');
+```
+
+Once this message is received the AMP runtime will try to accommodate this request as soon as
+possible, but it will take into account where the reader is currently reading, whether the scrolling
+is ongoing and any other UX or performance factors. If the runtime cannot satisfy the resize events
+the `amp-ad` will show an `overflow` element. Clicking on the `overflow` element will immediately
+resize the `amp-ad` since it's triggered by a user action.
+
+Here are some factors that affect how fast the resize will be executed:
+
+- Whether the resize is triggered by the user action;
+- Whether the resize is requested for a currently active ad;
+- Whether the resize is requested for an ad below the viewport or above the viewport.
+
+
 ### Minimizing HTTP requests
 
 #### JS reuse across iframes

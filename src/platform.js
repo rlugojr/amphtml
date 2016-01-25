@@ -27,8 +27,8 @@ export class Platform {
    * @param {!Window} win
    */
   constructor(win) {
-    /** @const {!Window} */
-    this.win = win;
+    /** @const {!Navigator} */
+    this.navigator = win.navigator;
   }
 
   /**
@@ -36,7 +36,7 @@ export class Platform {
    * @return {boolean}
    */
   isIos() {
-    return /iPhone|iPad|iPod/i.test(this.win.navigator.userAgent);
+    return /iPhone|iPad|iPod/i.test(this.navigator.userAgent);
   }
 
   /**
@@ -44,16 +44,50 @@ export class Platform {
    * @return {boolean}
    */
   isSafari() {
-    return /Safari/i.test(this.win.navigator.userAgent) && !this.isChrome();
+    return /Safari/i.test(this.navigator.userAgent) && !this.isChrome() &&
+        !this.isEdge();
   }
 
   /**
-   * Whether the current browser a Chrome browser.
+   * Whether the current browser is a Chrome browser.
    * @return {boolean}
    */
   isChrome() {
     // Also true for MS Edge :)
-    return /Chrome|CriOS/i.test(this.win.navigator.userAgent);
+    return /Chrome|CriOS/i.test(this.navigator.userAgent) && !this.isEdge();
+  }
+
+  /**
+   * Whether the current browser is a Chrome browser.
+   * @return {boolean}
+   */
+  isFirefox() {
+    return /Firefox/i.test(this.navigator.userAgent) && !this.isEdge();
+  }
+
+  /**
+   * Whether the current browser is a IE browser.
+   * @return {boolean}
+   */
+  isIe() {
+    return (/MSIE/i.test(this.navigator.userAgent) ||
+        /IEMobile/i.test(this.navigator.userAgent));
+  }
+
+  /**
+   * Whether the current browser is an Edge browser.
+   * @return {boolean}
+   */
+  isEdge() {
+    return /Edge/i.test(this.navigator.userAgent);
+  }
+
+  /**
+   * Whether the current browser is based on the WebKit engine.
+   * @return {boolean}
+   */
+  isWebKit() {
+    return /WebKit/i.test(this.navigator.userAgent) && !this.isEdge();
   }
 };
 

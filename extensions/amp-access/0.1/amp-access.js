@@ -17,18 +17,19 @@
 import {all} from '../../../src/promise';
 import {actionServiceFor} from '../../../src/action';
 import {assert, assertEnumValue} from '../../../src/asserts';
-import {assertHttpsUrl} from '../../../src/url';
+import {assertHttpsUrl, getSourceOrigin} from '../../../src/url';
 import {cidFor} from '../../../src/cid';
 import {documentStateFor} from '../../../src/document-state';
 import {evaluateAccessExpr} from './access-expr';
 import {getService} from '../../../src/service';
 import {installStyles} from '../../../src/styles';
-import {isExperimentOn} from '../../../src/experiments';
+import {isDevChannel, isExperimentOn} from '../../../src/experiments';
 import {listenOnce} from '../../../src/event-helper';
 import {log} from '../../../src/log';
 import {onDocumentReady} from '../../../src/document-state';
 import {openLoginDialog} from './login-dialog';
 import {parseQueryString} from '../../../src/url';
+import {resourcesFor} from '../../../src/resources';
 import {templatesFor} from '../../../src/template';
 import {timer} from '../../../src/timer';
 import {urlReplacementsFor} from '../../../src/url-replacements';
@@ -90,7 +91,8 @@ export class AccessService {
     installStyles(this.win.document, $CSS$, () => {});
 
     /** @const @private {boolean} */
-    this.isExperimentOn_ = isExperimentOn(this.win, EXPERIMENT);
+    this.isExperimentOn_ = (isExperimentOn(this.win, EXPERIMENT) ||
+        isDevChannel(this.win));
 
     const accessElement = document.getElementById('amp-access');
 
@@ -105,6 +107,9 @@ export class AccessService {
 
     /** @const @private {!AccessConfigDef} */
     this.config_ = this.buildConfig_();
+
+    /** @const @private {string} */
+    this.pubOrigin_ = getSourceOrigin(this.win.location);
 
     /** @const @private {!Vsync} */
     this.vsync_ = vsyncFor(this.win);
@@ -130,11 +135,17 @@ export class AccessService {
     /** @private @const {!Templates} */
     this.templates_ = templatesFor(this.win);
 
+    /** @private @const {!Resources} */
+    this.resources_ = resourcesFor(this.win);
+
     /** @private @const {function(string):Promise<string>} */
     this.openLoginDialog_ = openLoginDialog.bind(null, this.win);
 
     /** @private {?Promise<string>} */
     this.readerIdPromise_ = null;
+
+    /** @private {?JSONObject} */
+    this.authResponse_ = null;
 
     /** @private {!Promise} */
     this.firstAuthorizationPromise_ = new Promise(resolve => {
@@ -144,6 +155,9 @@ export class AccessService {
 
     /** @private {?Promise} */
     this.reportViewPromise_ = null;
+
+    /** @private {?string} */
+    this.loginUrl_ = null;
 
     /** @private {?Promise} */
     this.loginPromise_ = null;
@@ -223,11 +237,35 @@ export class AccessService {
     actionServiceFor(this.win).installActionHandler(
         this.accessElement_, this.handleAction_.bind(this));
 
+    // Calculate login URL right away.
+    this.buildLoginUrl_();
+
     // Start authorization XHR immediately.
     this.runAuthorization_();
 
     // Wait for the "view" signal.
     this.scheduleView_();
+
+    // Listen to amp-access broadcasts from other pages.
+    this.listenToBroadcasts_();
+  }
+
+  /** @private */
+  listenToBroadcasts_() {
+    this.viewer_.onBroadcast(message => {
+      if (message['type'] == 'amp-access-reauthorize' &&
+              message['origin'] == this.pubOrigin_) {
+        this.runAuthorization_();
+      }
+    });
+  }
+
+  /** @private */
+  broadcastReauthorize_() {
+    this.viewer_.broadcast({
+      'type': 'amp-access-reauthorize',
+      'origin': this.pubOrigin_
+    });
   }
 
   /**
@@ -248,14 +286,24 @@ export class AccessService {
 
   /**
    * @param {string} url
+   * @param {boolean} useAuthData Allows `AUTH(field)` URL var substitutions.
    * @return {!Promise<string>}
    * @private
    */
-  buildUrl_(url) {
+  buildUrl_(url, useAuthData) {
     return this.getReaderId_().then(readerId => {
-      return this.urlReplacements_.expand(url, {
+      const vars = {
         'READER_ID': readerId
-      });
+      };
+      if (useAuthData) {
+        vars['AUTHDATA'] = field => {
+          if (this.authResponse_) {
+            return this.authResponse_[field];
+          }
+          return undefined;
+        };
+      }
+      return this.urlReplacements_.expand(url, vars);
     });
   }
 
@@ -272,13 +320,17 @@ export class AccessService {
 
     log.fine(TAG, 'Start authorization via ', this.config_.authorization);
     this.toggleTopClass_('amp-access-loading', true);
-    return this.buildUrl_(this.config_.authorization).then(url => {
+    const promise = this.buildUrl_(
+        this.config_.authorization, /* useAuthData */ false);
+    return promise.then(url => {
       log.fine(TAG, 'Authorization URL: ', url);
       return this.xhr_.fetchJson(url, {credentials: 'include'});
     }).then(response => {
       log.fine(TAG, 'Authorization response: ', response);
-      this.firstAuthorizationResolver_();
+      this.setAuthResponse_(response);
       this.toggleTopClass_('amp-access-loading', false);
+      this.toggleTopClass_('amp-access-error', false);
+      this.buildLoginUrl_();
       return new Promise((resolve, reject) => {
         onDocumentReady(this.win.document, () => {
           this.applyAuthorization_(response).then(resolve, reject);
@@ -287,7 +339,17 @@ export class AccessService {
     }).catch(error => {
       log.error(TAG, 'Authorization failed: ', error);
       this.toggleTopClass_('amp-access-loading', false);
+      this.toggleTopClass_('amp-access-error', true);
     });
+  }
+
+  /**
+   * @param {!JSONObject} authResponse
+   * @private
+   */
+  setAuthResponse_(authResponse) {
+    this.authResponse_ = authResponse;
+    this.firstAuthorizationResolver_();
   }
 
   /**
@@ -331,7 +393,11 @@ export class AccessService {
    * @private
    */
   applyAuthorizationAttrs_(element, on) {
-    return this.vsync_.mutatePromise(() => {
+    const wasOn = !element.hasAttribute('amp-access-hide');
+    if (on == wasOn) {
+      return Promise.resolve();
+    }
+    return this.resources_.mutateElement(element, () => {
       if (on) {
         element.removeAttribute('amp-access-hide');
       } else {
@@ -434,6 +500,7 @@ export class AccessService {
               this.reportViewPromise_ = null;
               throw reason;
             });
+    this.reportViewPromise_.then(this.broadcastReauthorize_.bind(this));
     return this.reportViewPromise_;
   }
 
@@ -481,7 +548,9 @@ export class AccessService {
       log.fine(TAG, 'Ignore pingback');
       return Promise.resolve();
     }
-    return this.buildUrl_(this.config_.pingback).then(url => {
+    const promise = this.buildUrl_(
+        this.config_.pingback, /* useAuthData */ true);
+    return promise.then(url => {
       log.fine(TAG, 'Pingback URL: ', url);
       return this.xhr_.sendSignal(url, {
         method: 'POST',
@@ -532,15 +601,17 @@ export class AccessService {
     }
 
     log.fine(TAG, 'Start login');
-    const urlPromise = this.buildUrl_(assert(this.config_.login,
-        'Login URL is not configured'));
-    this.loginPromise_ = this.openLoginDialog_(urlPromise).then(result => {
+    assert(this.config_.login, 'Login URL is not configured');
+    // Login URL should always be available at this time.
+    const loginUrl = assert(this.loginUrl_, 'Login URL is not ready');
+    this.loginPromise_ = this.openLoginDialog_(loginUrl).then(result => {
       log.fine(TAG, 'Login dialog completed: ', result);
       this.loginPromise_ = null;
       const query = parseQueryString(result);
       const s = query['success'];
       const success = (s == 'true' || s == 'yes' || s == '1');
       if (success) {
+        this.broadcastReauthorize_();
         // Repeat the authorization flow.
         return this.runAuthorization_();
       }
@@ -550,6 +621,21 @@ export class AccessService {
       throw reason;
     });
     return this.loginPromise_;
+  }
+
+  /**
+   * @return {!Promise<string>|undefined}
+   * @private
+   */
+  buildLoginUrl_() {
+    if (!this.config_.login) {
+      return;
+    }
+    return this.buildUrl_(this.config_.login, /* useAuthData */ true)
+        .then(url => {
+          this.loginUrl_ = url;
+          return url;
+        });
   }
 }
 

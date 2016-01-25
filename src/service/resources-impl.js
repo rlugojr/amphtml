@@ -26,6 +26,7 @@ import {inputFor} from '../input';
 import {log} from '../log';
 import {reportError} from '../error';
 import {timer} from '../timer';
+import {installFramerateService} from './framerate-impl';
 import {installViewerService} from './viewer-impl';
 import {installViewportService} from './viewport-impl';
 import {installVsyncService} from './vsync-impl';
@@ -43,6 +44,7 @@ const PRIORITY_PENALTY_TIME_ = 1000;
 const POST_TASK_PASS_DELAY_ = 1000;
 const MUTATE_DEFER_DELAY_ = 500;
 const FOCUS_HISTORY_TIMEOUT_ = 1000 * 60;  // 1min
+const FOUR_FRAME_DELAY_ = 70;
 
 
 /**
@@ -160,6 +162,9 @@ export class Resources {
     /** @private {boolean} */
     this.vsyncScheduled_ = false;
 
+    /** @private @const {!Framerate}  */
+    this.framerate_ = installFramerateService(this.win);
+
     // When viewport is resized, we have to re-measure all elements.
     this.viewport_.onChanged(event => {
       this.lastScrollTime_ = timer.now();
@@ -169,6 +174,7 @@ export class Resources {
     });
     this.viewport_.onScroll(() => {
       this.lastScrollTime_ = timer.now();
+      this.framerate_.collect();
     });
 
     // When document becomes visible, e.g. from "prerender" mode, do a
@@ -206,6 +212,26 @@ export class Resources {
    */
   get() {
     return this.resources_.slice(0);
+  }
+
+  /**
+   * Returns a subset of resources which is identified as being in the current
+   * viewport.
+   * @param {boolean=} opt_isInPrerender signifies if we are in prerender mode.
+   * @return {!Array<!Resource>}
+   */
+  getResourcesInViewport(opt_isInPrerender) {
+    opt_isInPrerender = opt_isInPrerender || false;
+    const viewportRect = this.viewport_.getRect();
+    return this.resources_.filter(r => {
+      if (r.hasOwner() || !r.isDisplayed() || !r.overlaps(viewportRect)) {
+        return false;
+      }
+      if (opt_isInPrerender && !r.prerenderAllowed()) {
+        return false;
+      }
+      return true;
+    });
   }
 
   /** @private */
@@ -435,6 +461,60 @@ export class Resources {
   }
 
   /**
+   * Runs the specified mutation on the element and ensures that measures
+   * and layouts performed for the affected elements.
+   *
+   * This method should be called whenever a significant mutations are done
+   * on the DOM that could affect layout of elements inside this subtree or
+   * its siblings. The top-most affected element should be specified as the
+   * first argument to this method and all the mutation work should be done
+   * in the mutator callback which is called in the "mutation" vsync phase.
+   *
+   * @param {!Element} element
+   * @param {function()} mutator
+   * @return {!Promise}
+   */
+  mutateElement(element, mutator) {
+    const calcRelayoutTop = () => {
+      const box = this.viewport_.getLayoutRect(element);
+      if (box.width != 0 && box.height != 0) {
+        return box.top;
+      }
+      return -1;
+    };
+    let relayoutTop = -1;
+    return this.vsync_.runPromise({
+      measure: () => {
+        relayoutTop = calcRelayoutTop();
+      },
+      mutate: () => {
+        mutator();
+
+        // Mark children for re-measurement.
+        const ampElements = element.getElementsByClassName('-amp-element');
+        for (let i = 0; i < ampElements.length; i++) {
+          const r = this.getResourceForElement(ampElements[i]);
+          r.requestMeasure();
+        }
+        if (relayoutTop != -1) {
+          this.setRelayoutTop_(relayoutTop);
+        }
+        this.schedulePass(FOUR_FRAME_DELAY_);
+
+        // Need to measure again in case the element has become visible or
+        // shifted.
+        this.vsync_.measure(() => {
+          const updatedRelayoutTop = calcRelayoutTop();
+          if (updatedRelayoutTop != -1 && updatedRelayoutTop != relayoutTop) {
+            this.setRelayoutTop_(updatedRelayoutTop);
+            this.schedulePass(FOUR_FRAME_DELAY_);
+          }
+        });
+      }
+    });
+  }
+
+  /**
    * Schedules the work pass at the latest with the specified delay.
    * @param {number=} opt_delay
    */
@@ -542,8 +622,10 @@ export class Resources {
     // the overflow callbacks are called.
     const now = timer.now();
     const viewportRect = this.viewport_.getRect();
+    const scrollHeight = this.viewport_.getScrollHeight();
     const topOffset = viewportRect.height / 10;
-    const bottomOffset = viewportRect.height / 4;
+    const bottomOffset = viewportRect.height / 10;
+    const docBottomOffset = scrollHeight * 0.85;
     const isScrollingStopped = (Math.abs(this.lastVelocity_) < 1e-2 &&
         now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ ||
         now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ * 2);
@@ -569,8 +651,10 @@ export class Resources {
       for (let i = 0; i < requestsChangeHeight.length; i++) {
         const request = requestsChangeHeight[i];
         const resource = request.resource;
-        const box = request.resource.getLayoutBox();
-        if (box.height == request.newHeight) {
+        const box = resource.getLayoutBox();
+        const iniBox = resource.getInitialLayoutBox();
+        const diff = request.newHeight - box.height;
+        if (diff == 0) {
           // Nothing to do.
           continue;
         }
@@ -585,8 +669,11 @@ export class Resources {
           // 2. Active elements are immediately resized. The assumption is that
           // the resize is triggered by the user action or soon after.
           resize = true;
-        } else if (box.bottom >= viewportRect.bottom - bottomOffset) {
-          // 3. Elements under viewport are resized immediately.
+        } else if (box.bottom + Math.min(diff, 0) >=
+                      viewportRect.bottom - bottomOffset) {
+          // 3. Elements under viewport are resized immediately, but only if
+          // an element's boundary is not changed above the viewport after
+          // resize.
           resize = true;
         } else if (box.bottom <= viewportRect.top + topOffset) {
           // 4. Elements above the viewport can only be resized when scrolling
@@ -600,13 +687,16 @@ export class Resources {
             // Defer till next cycle.
             this.requestsChangeHeight_.push(request);
           }
-        } else if (request.newHeight < box.height) {
-          // 5. The new height is smaller than the current one.
-          // TODO(dvoytenko): Enable immediate resize in this case after
-          // potential abuse scenarios are considered.
+        } else if (iniBox.bottom >= docBottomOffset ||
+                      box.bottom >= docBottomOffset) {
+          // 5. Elements close to the bottom of the document (not viewport)
+          // are resized immediately.
+          resize = true;
+        } else if (diff < 0) {
+          // 6. The new height is smaller than the current one.
           resize = false;
         } else {
-          // 6. Element is in viewport don't resize and try overflow callback
+          // 7. Element is in viewport don't resize and try overflow callback
           // instead.
           request.resource.overflowCallback(/* overflown */ true,
               request.newHeight);
@@ -618,16 +708,13 @@ export class Resources {
           }
           request.resource./*OK*/changeHeight(
               request.newHeight, request.callback);
-          // Skip the overflowCallback if the newHeight is 0 or less.
-          if (request.newHeight > 0) {
-            request.resource.overflowCallback(/* overflown */ false,
-                request.newHeight);
-          }
+          request.resource.overflowCallback(/* overflown */ false,
+              request.newHeight);
         }
       }
 
       if (minTop != -1) {
-        this.relayoutTop_ = minTop;
+        this.setRelayoutTop_(minTop);
       }
 
       // Execute scroll-adjusting resize requests, if any.
@@ -645,7 +732,7 @@ export class Resources {
               request.resource./*OK*/changeHeight(request.newHeight);
             });
             if (minTop != -1) {
-              this.relayoutTop_ = minTop;
+              this.setRelayoutTop_(minTop);
             }
             // Sync is necessary here to avoid UI jump in the next frame.
             const newScrollHeight = this.viewport_./*OK*/getScrollHeight();
@@ -656,6 +743,18 @@ export class Resources {
           }
         });
       }
+    }
+  }
+
+  /**
+   * @param {number} relayoutTop
+   * @private
+   */
+  setRelayoutTop_(relayoutTop) {
+    if (this.relayoutTop_ == -1) {
+      this.relayoutTop_ = relayoutTop;
+    } else {
+      this.relayoutTop_ = Math.min(relayoutTop, this.relayoutTop_);
     }
   }
 
@@ -704,6 +803,7 @@ export class Resources {
 
     // Phase 1: Build and relayout as needed. All mutations happen here.
     let relayoutCount = 0;
+    let remeasureCount = 0;
     for (let i = 0; i < this.resources_.length; i++) {
       const r = this.resources_[i];
       if (r.getState() == ResourceState_.NOT_BUILT) {
@@ -713,11 +813,16 @@ export class Resources {
         r.applySizesAndMediaQuery();
         relayoutCount++;
       }
+      if (r.isMeasureRequested()) {
+        remeasureCount++;
+      }
     }
 
     // Phase 2: Remeasure if there were any relayouts. Unfortunately, currently
     // there's no way to optimize this. All reads happen here.
-    if (relayoutCount > 0 || relayoutAll || relayoutTop != -1) {
+    const toUnload = [];
+    if (relayoutCount > 0 || remeasureCount > 0 ||
+            relayoutAll || relayoutTop != -1) {
       for (let i = 0; i < this.resources_.length; i++) {
         const r = this.resources_[i];
         if (r.getState() == ResourceState_.NOT_BUILT || r.hasOwner()) {
@@ -725,10 +830,22 @@ export class Resources {
         }
         if (relayoutAll ||
                 r.getState() == ResourceState_.NOT_LAID_OUT ||
+                r.isMeasureRequested() ||
                 relayoutTop != -1 && r.getLayoutBox().bottom >= relayoutTop) {
+          const wasDisplayed = r.isDisplayed();
           r.measure();
+          if (wasDisplayed && !r.isDisplayed()) {
+            toUnload.push(r);
+          }
         }
       }
+    }
+
+    // Unload all in one cycle.
+    if (toUnload.length > 0) {
+      this.vsync_.mutate(() => {
+        toUnload.forEach(r => r.unload());
+      });
     }
 
     const viewportRect = this.viewport_.getRect();
@@ -1222,6 +1339,12 @@ export class Resource {
     /** @private {!LayoutRect} */
     this.layoutBox_ = layoutRectLtwh(-10000, -10000, 0, 0);
 
+    /** @private {!LayoutRect} */
+    this.initialLayoutBox_ = this.layoutBox_;
+
+    /** @private {boolean} */
+    this.isMeasureRequested_ = false;
+
     /** @private {boolean} */
     this.isInViewport_ = false;
 
@@ -1237,6 +1360,12 @@ export class Resource {
      * @private {number|undefined}
      */
     this.pendingChangeHeight_;
+
+    /** @private {?function(*)} */
+    this.whenFirstLayoutCompleteResolve_ = null;
+
+    /** @private @const {?Promise} */
+    this.whenFirstLayoutCompletePromise_ = null;
   }
 
   /**
@@ -1311,7 +1440,12 @@ export class Resource {
     if (!built) {
       return false;
     }
-    this.state_ = ResourceState_.NOT_LAID_OUT;
+
+    if (this.hasBeenMeasured()) {
+      this.state_ = ResourceState_.READY_FOR_LAYOUT;
+    } else {
+      this.state_ = ResourceState_.NOT_LAID_OUT;
+    }
     return true;
   }
 
@@ -1367,25 +1501,52 @@ export class Resource {
    * Measures the resource's boundaries. Only allowed for upgraded elements.
    */
   measure() {
-    assert(this.element.isUpgraded(), 'Must be upgraded to measure: %s',
-        this.debugid);
-    if (this.state_ == ResourceState_.NOT_BUILT) {
-      // Can't measure unbuilt element.
-      return;
-    }
+    this.isMeasureRequested_ = false;
     const box = this.resources_.viewport_.getLayoutRect(this.element);
     // Note that "left" doesn't affect readiness for the layout.
     if (this.state_ == ResourceState_.NOT_LAID_OUT ||
           this.layoutBox_.top != box.top ||
           this.layoutBox_.width != box.width ||
           this.layoutBox_.height != box.height) {
-      if (this.state_ == ResourceState_.NOT_LAID_OUT ||
-              this.element.isRelayoutNeeded()) {
+
+      if (this.element.isUpgraded() &&
+              this.state_ != ResourceState_.NOT_BUILT &&
+              (this.state_ == ResourceState_.NOT_LAID_OUT ||
+                  this.element.isRelayoutNeeded())) {
         this.state_ = ResourceState_.READY_FOR_LAYOUT;
       }
     }
+    if (!this.hasBeenMeasured()) {
+      this.initialLayoutBox_ = box;
+    }
     this.layoutBox_ = box;
     this.element.updateLayoutBox(box);
+  }
+
+  /**
+   * @return {boolean}
+   */
+  isMeasureRequested() {
+    return this.isMeasureRequested_;
+  }
+
+  /**
+   * Checks if the current resource has been measured.
+   * @return {boolean}
+   */
+  hasBeenMeasured() {
+    return this.layoutBox_.top != -10000;
+  }
+
+  /**
+   * Requests the element to be remeasured on the next pass.
+   */
+  requestMeasure() {
+    if (this.state_ == ResourceState_.NOT_BUILT) {
+      // Can't measure unbuilt element.
+      return;
+    }
+    this.isMeasureRequested_ = true;
   }
 
   /**
@@ -1394,6 +1555,14 @@ export class Resource {
    */
   getLayoutBox() {
     return this.layoutBox_;
+  }
+
+  /**
+   * Returns the first measured layout box.
+   * @return {!LayoutRect}
+   */
+  getInitialLayoutBox() {
+    return this.initialLayoutBox_;
   }
 
   /**
@@ -1492,14 +1661,17 @@ export class Resource {
     this.layoutCount_++;
     this.state_ = ResourceState_.LAYOUT_SCHEDULED;
 
+    this.resources_.framerate_.collect(this.element);
     let promise;
     try {
       promise = this.element.layoutCallback();
     } catch (e) {
       return Promise.reject(e);
     }
+
     this.layoutPromise_ = promise.then(() => this.layoutComplete_(true),
         reason => this.layoutComplete_(false, reason));
+    this.layoutPromise_.then(this.whenFirstLayoutCompleteResolve_);
     return this.layoutPromise_;
   }
 
@@ -1518,6 +1690,20 @@ export class Resource {
       log.fine(TAG_, 'loading failed:', this.debugid, opt_reason);
       return Promise.reject(opt_reason);
     }
+  }
+
+  /**
+   * Returns a promise that is resolved when this resource is laid out
+   * for the first time.
+   * @return {!Promise}
+   */
+  whenFirstLayoutComplete() {
+    if (!this.whenFirstLayoutCompletePromise_) {
+      this.whenFirstLayoutCompletePromise_ = new Promise(resolve => {
+        this.whenFirstLayoutCompleteResolve_ = resolve;
+      });
+    }
+    return this.whenFirstLayoutCompletePromise_;
   }
 
   /**
@@ -1555,6 +1741,14 @@ export class Resource {
     if (this.element.documentInactiveCallback()) {
       this.state_ = ResourceState_.NOT_LAID_OUT;
     }
+  }
+
+  /**
+   * Called when a previously visible element has become invisible.
+   */
+  unload() {
+    // TODO(dvoytenko): Likely warrants its own callback and re-layout rules.
+    this.documentBecameInactive();
   }
 
   /**

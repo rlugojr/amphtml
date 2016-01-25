@@ -33,6 +33,9 @@ var privateServiceFactory = 'This service should only be installed in ' +
     'the whitelisted files. Other modules should use a public function ' +
     'typically called serviceNameFor.';
 
+var shouldNeverBeUsed =
+    'Usage of this API is not allowed - only for internal purposes.';
+
 // Terms that must not appear in our source files.
 var forbiddenTerms = {
   'DO NOT SUBMIT': '',
@@ -53,6 +56,7 @@ var forbiddenTerms = {
     message: privateServiceFactory,
     whitelist: [
       'src/service/action-impl.js',
+      'src/service/standard-actions-impl.js',
       'src/amp-core-service.js',
     ],
   },
@@ -104,6 +108,7 @@ var forbiddenTerms = {
     whitelist: [
       'src/amp-core-service.js',
       'src/service/resources-impl.js',
+      'src/service/standard-actions-impl.js',
     ],
   },
   // Privacy sensitive
@@ -147,6 +152,20 @@ var forbiddenTerms = {
       'src/cookies.js',
       'src/experiments.js',
       'tools/experiments/experiments.js',
+    ]
+  },
+  'isDevChannel\\W': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-access/0.1/amp-access.js',
+      'src/experiments.js',
+      'tools/experiments/experiments.js',
+    ]
+  },
+  'isDevChannelVersionDoNotUse_\\W': {
+    message: shouldNeverBeUsed,
+    whitelist: [
+      'src/experiments.js',
     ]
   },
   'eval\\(': '',
@@ -263,7 +282,7 @@ var forbiddenTermsSrcInclusive = {
 
 // Terms that must appear in a source file.
 var requiredTerms = {
-  'Copyright 2015 The AMP HTML Authors\\.':
+  'Copyright 20(15|16) The AMP HTML Authors\\.':
       dedicatedCopyrightNoteSources,
   'Licensed under the Apache License, Version 2\\.0':
       dedicatedCopyrightNoteSources,

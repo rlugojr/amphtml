@@ -15,8 +15,10 @@
  */
 
 import {installActionService} from './service/action-impl';
+import {installFramerateService} from './service/framerate-impl';
 import {installHistoryService} from './service/history-impl';
 import {installResourcesService} from './service/resources-impl';
+import {installStandardActions} from './service/standard-actions-impl';
 import {installViewerService} from './service/viewer-impl';
 import {installViewportService} from './service/viewport-impl';
 import {installVsyncService} from './service/vsync-impl';
@@ -34,4 +36,6 @@ export function installCoreServices(window) {
   installVsyncService(window);
   installActionService(window);
   installResourcesService(window);
+  installStandardActions(window);
+  installFramerateService(window);
 }

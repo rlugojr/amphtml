@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import {IntersectionObserver} from '../../src/intersection-observer';
 import {createIframePromise} from '../../testing/iframe';
 import {installAd} from '../../builtins/amp-ad';
 import {viewportFor} from
@@ -38,6 +39,11 @@ describe('amp-ad', () => {
           let a = iframe.doc.createElement('amp-ad');
           for (const key in attributes) {
             a.setAttribute(key, attributes[key]);
+          }
+          if (attributes.resizable !== undefined) {
+            const overflowEl = iframe.doc.createElement('div');
+            overflowEl.setAttribute('overflow', '');
+            a.appendChild(overflowEl);
           }
           // Make document long.
           a.style.marginBottom = '1000px';
@@ -154,6 +160,72 @@ describe('amp-ad', () => {
     })).to.be.not.be.rejected;
   });
 
+  describe('ad resize', () => {
+    it('should listen for resize events',() => {
+      const iframeSrc = 'http://iframe.localhost:' + location.port +
+          '/base/test/fixtures/served/iframe.html';
+      return getAd({
+        width: 100,
+        height: 100,
+        type: 'a9',
+        src: 'testsrc',
+        resizable: ''
+      }, 'https://schema.org').then(element => {
+        return new Promise((resolve, unusedReject) => {
+          impl = element.implementation_;
+          impl.layoutCallback();
+          impl.updateHeight_ = newHeight => {
+            expect(newHeight).to.equal(217);
+            resolve(impl);
+          };
+          impl.iframe_.onload = function() {
+            impl.iframe_.contentWindow.postMessage({
+              sentinel: 'amp-test',
+              type: 'requestHeight',
+              is3p: true,
+              height: 217
+            }, '*');
+          };
+          impl.iframe_.src = iframeSrc;
+        });
+      }).then(impl => {
+        expect(impl.iframe_.height).to.equal('217');
+      });
+    });
+    it('should fallback for resize with overflow element',() => {
+      return getAd({
+        width: 100,
+        height: 100,
+        type: 'a9',
+        src: 'testsrc',
+        resizable: ''
+      }, 'https://schema.org').then(element => {
+        impl = element.implementation_;
+        impl.attemptChangeHeight = sinon.spy();
+        impl.changeHeight = sinon.spy();
+        impl.updateHeight_(217);
+        expect(impl.changeHeight.callCount).to.equal(0);
+        expect(impl.attemptChangeHeight.callCount).to.equal(1);
+        expect(impl.attemptChangeHeight.firstCall.args[0]).to.equal(217);
+      });
+    });
+    it('should not resize a non-resizable ad',() => {
+      return getAd({
+        width: 100,
+        height: 100,
+        type: 'a9',
+        src: 'testsrc'
+      }, 'https://schema.org').then(element => {
+        impl = element.implementation_;
+        impl.attemptChangeHeight = sinon.spy();
+        impl.changeHeight = sinon.spy();
+        impl.updateHeight_(217);
+        expect(impl.changeHeight.callCount).to.equal(0);
+        expect(impl.attemptChangeHeight.callCount).to.equal(0);
+      });
+    });
+  });
+
   describe('ad intersection', () => {
 
     let ampAd;
@@ -178,14 +250,17 @@ describe('amp-ad', () => {
             targetOrigin: origin,
           });
         };
-        expect(ampAd.shouldSendIntersectionChanges_).to.be.false;
-        ampAd.startSendingIntersectionChanges_();
-        expect(ampAd.shouldSendIntersectionChanges_).to.be.true;
-        expect(ampAd.iframeLayoutBox_).to.be.null;
+        ampAd.intersectionObserver_ =
+            new IntersectionObserver(ampAd, ampAd.iframe_, true);
+        ampAd.intersectionObserver_.startSendingIntersectionChanges_();
         expect(posts).to.have.length(0);
         ampAd.getVsync().runScheduledTasks_();
         expect(posts).to.have.length(1);
       });
+    });
+
+    afterEach(() => {
+      ampAd.intersectionObserver_.dispose();
     });
 
     it('should calculate intersection', () => {
@@ -205,7 +280,7 @@ describe('amp-ad', () => {
       const viewport = viewportFor(win);
       expect(posts).to.have.length(1);
       viewport.setScrollTop(0);
-      ampAd.sendAdIntersection_();
+      ampAd.intersectionObserver_.fire();
       expect(posts).to.have.length(2);
       const changes = posts[1].data.changes;
       expect(changes).to.have.length(1);
@@ -214,7 +289,7 @@ describe('amp-ad', () => {
       expect(changes[0].intersectionRect.width).to.equal(300);
 
       viewport.setScrollTop(350);
-      ampAd.sendAdIntersection_();
+      ampAd.intersectionObserver_.fire();
       expect(posts).to.have.length(3);
       const changes2 = posts[2].data.changes;
       expect(changes2).to.have.length(1);
@@ -282,7 +357,7 @@ describe('amp-ad', () => {
       });
     });
 
-    it('should collapse when equestChangeHeight succeeds', () => {
+    it('should collapse when attemptChangeHeight succeeds', () => {
       return getAd({
         width: 300,
         height: 750,

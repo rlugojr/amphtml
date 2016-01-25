@@ -15,12 +15,12 @@
  */
 
 import {assertHttpsUrl} from '../../../src/url';
-import {isExperimentOn} from '../../../src/experiments';
 import {installCidService} from '../../../src/service/cid-impl';
 import {log} from '../../../src/log';
 import {urlReplacementsFor} from '../../../src/url-replacements';
 import {expandTemplate} from '../../../src/string';
 import {xhrFor} from '../../../src/xhr';
+import {isArray, isObject} from '../../../src/types';
 
 import {addListener} from './instrumentation';
 import {sendRequest} from './transport';
@@ -30,18 +30,7 @@ import {ANALYTICS_CONFIG} from './vendors';
 installCidService(AMP.win);
 
 
-/** @const */
-const EXPERIMENT = 'amp-analytics';
-
 export class AmpAnalytics extends AMP.BaseElement {
-
-  /**
-   * @return {boolean}
-   * @private
-   */
-  isExperimentOn_() {
-    return isExperimentOn(this.getWin(), EXPERIMENT);
-  }
 
   /** @override */
   isLayoutSupported(unusedLayout) {
@@ -52,10 +41,6 @@ export class AmpAnalytics extends AMP.BaseElement {
    * @override
    */
   createdCallback() {
-    if (!this.isExperimentOn_()) {
-      return;
-    }
-
     /**
      * @const {!JSONObject} Copied here for tests.
      * @private
@@ -65,9 +50,6 @@ export class AmpAnalytics extends AMP.BaseElement {
 
   /** @override */
   layoutCallback() {
-    if (!this.isExperimentOn_()) {
-      return Promise.resolve();
-    }
 
     this.element.setAttribute('aria-hidden', 'true');
 
@@ -103,8 +85,8 @@ export class AmpAnalytics extends AMP.BaseElement {
       this.generateRequests_();
 
       if (!this.config_['triggers']) {
-        log.error(this.getName_(), 'No triggers were found in the config. No ' +
-            'analytics data will be sent.');
+        console./*OK*/error(this.getName_(), 'No triggers were found in the ' +
+            'config. No analytics data will be sent.');
         return Promise.resolve();
       }
 
@@ -113,8 +95,8 @@ export class AmpAnalytics extends AMP.BaseElement {
         if (this.config_['triggers'].hasOwnProperty(k)) {
           const trigger = this.config_['triggers'][k];
           if (!trigger['on'] || !trigger['request']) {
-            log.warn(this.getName_(), '"on" and "request" attributes are ' +
-                'required for data to be collected.');
+            console./*OK*/error(this.getName_(), '"on" and "request" ' +
+                'attributes are required for data to be collected.');
             continue;
           }
           addListener(this.getWin(), trigger['on'],
@@ -141,7 +123,7 @@ export class AmpAnalytics extends AMP.BaseElement {
       this.remoteConfig_ = jsonValue;
       log.fine(this.getName_(), 'Remote config loaded', remoteConfigUrl);
     }, err => {
-      log.warn(this.getName_(), 'Error loading remote config',
+      console./*OK*/error(this.getName_(), 'Error loading remote config: ',
           remoteConfigUrl, err);
     });
   }
@@ -168,17 +150,17 @@ export class AmpAnalytics extends AMP.BaseElement {
             child.getAttribute('type').toUpperCase() == 'APPLICATION/JSON') {
           inlineConfig = JSON.parse(children[0].textContent);
         } else {
-          log.warn(this.getName_(), 'The analytics config should be put in a ' +
-              '<script> tag with type=application/json');
+          console./*OK*/error(this.getName_(), 'The analytics config should ' +
+              'be put in a <script> tag with type=application/json');
         }
       } else if (children.length > 1) {
-        log.warn(this.getName_(),
-            'The tag should contain only one <script> child.');
+        console./*OK*/error(this.getName_(), 'The tag should contain only one' +
+            ' <script> child.');
       }
     }
     catch (er) {
-      log.warn(this.getName_(), 'Analytics config could not be parsed. ' +
-          'Is it in a valid JSON format?', er);
+      console./*OK*/error(this.getName_(), 'Analytics config could not be ' +
+          'parsed. Is it in a valid JSON format?', er);
     }
 
     const config = {};
@@ -255,8 +237,8 @@ export class AmpAnalytics extends AMP.BaseElement {
   handleEvent_(trigger, unusedEvent) {
     let request = this.requests_[trigger['request']];
     if (!request) {
-      log.warn(this.getName_(),
-          'Ignoring event. Request string not found', trigger['request']);
+      console./*OK*/error(this.getName_(), 'Ignoring event. Request string ' +
+          'not found: ', trigger['request']);
       return;
     }
 
@@ -284,7 +266,7 @@ export class AmpAnalytics extends AMP.BaseElement {
    */
   sendRequest_(request) {
     if (!request) {
-      log.warn(this.getName_(), 'Request not sent. Contents empty.');
+      console./*OK*/error(this.getName_(), 'Request not sent. Contents empty.');
       return;
     }
     sendRequest(this.getWin(), request, this.config_['transport'] || {});
@@ -309,20 +291,15 @@ export class AmpAnalytics extends AMP.BaseElement {
    * @private
    */
   mergeObjects_(from, to) {
-    // Checks if the given object is a plain object.
-    const isObject = function(someObj) {
-      return Object.prototype.toString.call(someObj) === '[object Object]';
-    };
-
     if (to === null || to === undefined) {
       to = {};
     }
 
     for (const property in from) {
+      // Only deal with own properties.
       if (from.hasOwnProperty(property)) {
-        // Only deal with own properties.
-        if (Array.isArray(from[property])) {
-          if (!Array.isArray(to[property])) {
+        if (isArray(from[property])) {
+          if (!isArray(to[property])) {
             to[property] = [];
           }
           to[property] = this.mergeObjects_(from[property], to[property]);

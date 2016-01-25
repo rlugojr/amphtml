@@ -25,3 +25,4 @@ require('./presubmit-checks');
 require('./serve');
 require('./size');
 require('./test');
+require('./validator');

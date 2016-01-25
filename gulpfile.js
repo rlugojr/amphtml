@@ -18,6 +18,7 @@ var autoprefixer = require('autoprefixer');
 var babel = require('babelify');
 var browserify = require('browserify');
 var buffer = require('vinyl-buffer');
+var closureCompile = require('./build-system/tasks/compile').closureCompile;
 var cssnano = require('cssnano');
 var file = require('gulp-file');
 var fs = require('fs-extra');
@@ -75,6 +76,7 @@ function buildExtensions(options) {
   buildExtension('amp-brightcove', '0.1', false, options);
   buildExtension('amp-carousel', '0.1', true, options);
   buildExtension('amp-dynamic-css-classes', '0.1', false, options);
+  buildExtension('amp-facebook', '0.1', false, options);
   buildExtension('amp-fit-text', '0.1', true, options);
   buildExtension('amp-font', '0.1', false, options);
   buildExtension('amp-iframe', '0.1', false, options);
@@ -123,7 +125,11 @@ function compile(watch, shouldMinify) {
     // If there is a sync JS error during initial load,
     // at least try to unhide the body.
     wrapper: 'try{<%= contents %>}catch(e){setTimeout(function(){' +
-        'document.body.style.opacity=1},1000);throw e};'
+        'var s=document.body.style;' +
+        's.opacity=1;' +
+        's.visibility="visible";' +
+        's.animation="none";' +
+        's.WebkitAnimation="none;"},1000);throw e};'
   });
   compileJs('./3p/', 'integration.js', './dist.3p/' + internalRuntimeVersion, {
     minifiedName: 'f.js',
@@ -250,7 +256,7 @@ function buildExtensionJs(js, path, name, version, options) {
       .pipe(file(builtName, js))
       .pipe(gulp.dest('build/all/v0/'))
       .on('end', function() {
-        compileJs('build/all/v0/', builtName, 'dist/v0/', {
+        compileJs('./build/all/v0/', builtName, './dist/v0', {
           watch: options.watch,
           minify: options.minify,
           minifiedName: minifiedName,
@@ -295,12 +301,13 @@ function buildExamples(watch) {
     });
   }
 
-  fs.copy('examples/img/', 'examples.build/img/', {clobber: true},
-      copyHandler.bind(null, 'examples/img folder'));
-  fs.copy('examples/video/', 'examples.build/video/', {clobber: true},
-      copyHandler.bind(null, 'examples/video folder'));
-  fs.copy('examples/fonts/', 'examples.build/fonts/', {clobber: true},
-      copyHandler.bind(null, 'examples/fonts folder'));
+  fs.copy('examples/', 'examples.build/', {clobber: true},
+      function(err) {
+        if (err) {
+          return util.log(util.colors.red('copy error: ', err));
+        }
+        util.log(util.colors.green('copied examples to examples.build'));
+      });
 
   // Also update test-example-validation.js
   buildExample('ads.amp.html');
@@ -317,6 +324,7 @@ function buildExamples(watch) {
   buildExample('metadata-examples/video-microdata.amp.html');
   buildExample('everything.amp.html');
   buildExample('font.amp.html');
+  buildExample('facebook.amp.html');
   buildExample('instagram.amp.html');
   buildExample('pinterest.amp.html');
   buildExample('released.amp.html');
@@ -328,13 +336,6 @@ function buildExamples(watch) {
   // // Examples are also copied into `c/` directory for AMP-proxy testing.
   // fs.copy('examples.build/', 'c/', {clobber: true},
   //     copyHandler.bind(null, 'examples.build to c folder'));
-
-  function copyHandler(name, err) {
-    if (err) {
-      return util.log(util.colors.red('copy error: ', err));
-    }
-    util.log(util.colors.green('copied ' + name));
-  }
 }
 
 /**
@@ -445,6 +446,23 @@ function compileJs(srcDir, srcFilename, destDir, options) {
 
   function minify() {
     console.log('Minifying ' + srcFilename);
+    closureCompile(srcDir + srcFilename, destDir, options.minifiedName,
+        options)
+        .then(function() {
+          fs.writeFileSync(destDir + '/version.txt', internalRuntimeVersion);
+          if (options.latestName) {
+            fs.copySync(
+                destDir + '/' + options.minifiedName,
+                destDir + '/' + options.latestName);
+          }
+        });
+  }
+
+  /*
+  Pre closure compiler minification. Add this back, should we have problems
+  with closure.
+  function minify() {
+    console.log('Minifying ' + srcFilename);
     bundler.bundle()
       .on('error', function(err) { console.error(err); this.emit('end'); })
       .pipe(lazybuild())
@@ -462,6 +480,7 @@ function compileJs(srcDir, srcFilename, destDir, options) {
         }
       });
   }
+  */
 
   if (options.minify) {
     minify();
@@ -523,7 +542,7 @@ function buildExperiments(options) {
       .pipe(file(builtName, js))
       .pipe(gulp.dest('build/experiments/'))
       .on('end', function() {
-        compileJs('build/experiments/', builtName, 'dist.tools/experiments/', {
+        compileJs('./build/experiments/', builtName, './dist.tools/experiments/', {
           watch: false,
           minify: options.minify || argv.minify,
           minifiedName: minifiedName,
@@ -609,7 +628,7 @@ function buildLoginDoneVersion(version, options) {
       .pipe(file(builtName, js))
       .pipe(gulp.dest('build/all/v0/'))
       .on('end', function() {
-        compileJs('build/all/v0/', builtName, 'dist/v0/', {
+        compileJs('./build/all/v0/', builtName, './dist/v0/', {
           watch: false,
           minify: options.minify || argv.minify,
           minifiedName: minifiedName,
