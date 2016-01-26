@@ -31,7 +31,6 @@ var git = require('gulp-git');
 var gulp = require('gulp-help')(require('gulp'));
 var request = BBPromise.promisify(require('request'));
 var util = require('gulp-util');
-var version = require('../internal-version').VERSION;
 
 var GITHUB_ACCESS_TOKEN = process.env.GITHUB_ACCESS_TOKEN;
 var exec = BBPromise.promisify(child_process.exec);
@@ -41,6 +40,7 @@ var isCanary = argv.type == 'canary';
 var suffix =  isCanary ? '-canary' : '';
 var branch = isCanary ? 'canary' : 'release';
 var isDryrun = argv.dryrun;
+
 
 function changelog() {
   if (!GITHUB_ACCESS_TOKEN) {
@@ -57,6 +57,9 @@ function changelog() {
 }
 
 function getGitMetadata() {
+  if (!argv.version) {
+    throw new Error('no version value passed in. See --version flag option.');
+  }
 
   var gitMetadata = {};
   return getLastGitTag()
@@ -70,12 +73,14 @@ function getGitMetadata() {
         if (isDryrun) {
           return;
         }
-        return submitReleaseNotes(version, gitMetadata.changelog);
+        return getCurrentSha().then(
+          submitReleaseNotes.bind(null, version, gitMetadata.changelog)
+        );
       })
       .catch(errHandler);
 }
 
-function submitReleaseNotes(version, changelog) {
+function submitReleaseNotes(version, changelog, sha) {
   var name = String(version);
   var options = {
     url: 'https://api.github.com/repos/ampproject/amphtml/releases',
@@ -87,7 +92,7 @@ function submitReleaseNotes(version, changelog) {
     json: true,
     body: {
       'tag_name': name,
-      'target_commitish': branch,
+      'target_commitish': sha,
       'name': name,
       'body': changelog,
       'draft': true,
@@ -104,6 +109,10 @@ function submitReleaseNotes(version, changelog) {
   return request(options).then(function() {
     util.log(util.colors.green('Release Notes submitted'));
   });
+}
+
+function getCurrentSha() {
+  return gitExec({ args: 'rev-parse HEAD' });
 }
 
 function buildChangelog(gitMetadata, githubMetadata) {
@@ -252,5 +261,6 @@ gulp.task('changelog', 'Create github release draft', changelog, {
   options: {
     dryrun: '  Generate changelog but dont push it out',
     type: '  Pass in "canary" to generate a canary changelog',
+    version: '  The git tag and github release label',
   }
 });
