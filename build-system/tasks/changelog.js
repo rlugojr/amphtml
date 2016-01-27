@@ -74,7 +74,7 @@ function getGitMetadata() {
           return;
         }
         return getCurrentSha().then(
-          submitReleaseNotes.bind(null, version, gitMetadata.changelog)
+          submitReleaseNotes.bind(null, argv.version, gitMetadata.changelog)
         );
       })
       .catch(errHandler);
@@ -112,7 +112,9 @@ function submitReleaseNotes(version, changelog, sha) {
 }
 
 function getCurrentSha() {
-  return gitExec({ args: 'rev-parse HEAD' });
+  return gitExec({ args: 'rev-parse HEAD' }).then(function(sha) {
+    return sha.trim();
+  });
 }
 
 function buildChangelog(gitMetadata, githubMetadata) {
