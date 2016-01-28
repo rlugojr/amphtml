@@ -16,6 +16,7 @@
 
 import {assert} from './asserts';
 
+const a = document.createElement('a');
 
 /**
  * Returns a Location-like object for the given URL. If it is relative,
@@ -24,7 +25,6 @@ import {assert} from './asserts';
  * @return {!Location}
  */
 export function parseUrl(url) {
-  const a = document.createElement('a');
   a.href = url;
   const info = {
     href: a.href,
@@ -93,6 +93,18 @@ export function assertHttpsUrl(urlString, elementContext) {
       'either https or from localhost. Invalid value: %s',
       elementContext, urlString);
   return urlString;
+}
+
+/**
+ * Asserts that a given url is an absolute HTTP or HTTPS URL.
+ * @param {string} urlString
+ * @return {string}
+ */
+export function assertAbsoluteHttpOrHttpsUrl(urlString) {
+  assert(/^(http\:|https\:)/i.test(urlString),
+      'URL must start with "http://" or "https://". Invalid value: %s',
+      urlString);
+  return parseUrl(urlString).href;
 }
 
 

@@ -223,13 +223,15 @@ describe('CustomElement', () => {
     expect(res).to.equal(true);
     expect(element.isBuilt()).to.equal(true);
     expect(testElementBuildCallback.callCount).to.equal(1);
-    expect(testElementPreconnectCallback.callCount).to.equal(1);
+    expect(testElementPreconnectCallback.callCount).to.equal(0);
 
     // Call again.
     res = element.build(false);
     expect(res).to.equal(true);
     expect(element.isBuilt()).to.equal(true);
     expect(testElementBuildCallback.callCount).to.equal(1);
+    expect(testElementPreconnectCallback.callCount).to.equal(0);
+    clock.tick(1);
     expect(testElementPreconnectCallback.callCount).to.equal(1);
   });
 
@@ -412,6 +414,7 @@ describe('CustomElement', () => {
     element.build(true);
     expect(element.isBuilt()).to.equal(true);
     expect(testElementLayoutCallback.callCount).to.equal(0);
+    clock.tick(1);
     expect(testElementPreconnectCallback.callCount).to.equal(1);
     expect(testElementPreconnectCallback.getCall(0).args[0]).to.be.false;
 
@@ -1125,19 +1128,25 @@ describe('CustomElement Overflow Element', () => {
   });
 
   it('should set overflow', () => {
+    const overflowCallbackSpy =
+        sandbox.spy(element.implementation_, 'overflowCallback');
     element.overflowCallback(true, 117);
     expect(element.overflowElement_).to.equal(overflowElement);
     expect(overflowElement).to.have.class('amp-visible');
     expect(overflowElement.onclick).to.exist;
+    expect(overflowCallbackSpy).to.be.calledWith(true, 117);
   });
 
   it('should unset overflow', () => {
+    const overflowCallbackSpy =
+        sandbox.spy(element.implementation_, 'overflowCallback');
     element.getOverflowElement();
     overflowElement.classList.toggle('amp-visible', true);
     element.overflowCallback(false, 117);
     expect(element.overflowElement_).to.equal(overflowElement);
     expect(overflowElement).to.not.have.class('amp-visible');
     expect(overflowElement.onclick).to.not.exist;
+    expect(overflowCallbackSpy).to.be.calledWith(false, 117);
   });
 
   it('should force change height when clicked', () => {

@@ -458,7 +458,16 @@ export function createAmpElementProto(win, name, implementationClass) {
    * @param {boolean} onLayout Whether this was called after a layout.
    */
   ElementProto.preconnect = function(onLayout) {
-    this.implementation_.preconnectCallback(onLayout);
+    if (onLayout) {
+      this.implementation_.preconnectCallback(onLayout);
+    } else {
+      // If we do early preconnects we delay them a bit. This is kind of
+      // an unfortunate trade off, but it seems faster, because the DOM
+      // operations themselves are not free and might delay
+      timer.delay(() => {
+        this.implementation_.preconnectCallback(onLayout);
+      }, 1);
+    }
   };
 
   /**
@@ -1033,37 +1042,31 @@ export function createAmpElementProto(win, name, implementationClass) {
    * @package @final
    */
   ElementProto.overflowCallback = function(overflown, requestedHeight) {
-    if (!overflown && !this.overflowElement_) {
-      // Overflow has never been initialized and not wanted.
-      return;
-    }
-
-    const overflowElement = this.getOverflowElement();
-    if (!overflowElement) {
+    this.getOverflowElement();
+    if (!this.overflowElement_) {
       if (overflown) {
         log.warn(TAG_,
             'Cannot resize element and overlfow is not available', this);
       }
-      return;
-    }
-
-    overflowElement.classList.toggle('amp-visible', overflown);
-
-    if (overflown) {
-      this.overflowElement_.onclick = () => {
-        this.resources_./*OK*/changeHeight(this, requestedHeight);
-        this.getVsync_().mutate(() => {
-          this.overflowCallback(/* overflown */ false, requestedHeight);
-        });
-      };
     } else {
-      this.overflowElement_.onclick = null;
+      this.overflowElement_.classList.toggle('amp-visible', overflown);
+
+      if (overflown) {
+        this.overflowElement_.onclick = () => {
+          this.resources_./*OK*/changeHeight(this, requestedHeight);
+          this.getVsync_().mutate(() => {
+            this.overflowCallback(/* overflown */ false, requestedHeight);
+          });
+        };
+      } else {
+        this.overflowElement_.onclick = null;
+      }
     }
+    this.implementation_.overflowCallback(overflown, requestedHeight);
   };
 
   return ElementProto;
 }
-
 
 /**
  * Registers a new custom element with its implementation class.
