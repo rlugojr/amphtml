@@ -25,6 +25,7 @@ import * as sinon from 'sinon';
 import {getService, resetServiceForTesting} from '../../src/service';
 import {
   getElementService,
+  getElementServiceIfAvailable,
   markElementScheduledForTesting,
   resetScheduledElementForTesting
 } from '../../src/custom-element';
@@ -112,9 +113,7 @@ describe('CustomElement', () => {
 
   afterEach(() => {
     resourcesMock.verify();
-    resourcesMock.restore();
     resourcesMock = null;
-    clock.restore();
     sandbox.restore();
     sandbox = null;
   });
@@ -829,8 +828,6 @@ describe('CustomElement Loading Indicator', () => {
   afterEach(() => {
     vsync.mutate = savedMutate;
     resourcesMock.verify();
-    resourcesMock.restore();
-    clock.restore();
     sandbox.restore();
     sandbox = null;
   });
@@ -1058,7 +1055,6 @@ describe('CustomElement Overflow Element', () => {
 
   const resources = resourcesFor(window);
   let sandbox;
-  let clock;
   let element;
   let overflowElement;
   let savedMutate;
@@ -1068,7 +1064,6 @@ describe('CustomElement Overflow Element', () => {
 
   beforeEach(() => {
     sandbox = sinon.sandbox.create();
-    clock = sandbox.useFakeTimers();
     resourcesMock = sandbox.mock(resources);
     element = new ElementClass();
     element.layoutWidth_ = 300;
@@ -1087,8 +1082,6 @@ describe('CustomElement Overflow Element', () => {
   afterEach(() => {
     vsync.mutate = savedMutate;
     resourcesMock.verify();
-    resourcesMock.restore();
-    clock.restore();
     sandbox.restore();
     sandbox = null;
   });
@@ -1198,6 +1191,21 @@ describe('CustomElement Overflow Element', () => {
       }).then(result => {
         expect(result).to.match(
           /Service e1 was requested to be provided through element-bar/);
+      });
+    });
+
+    it('should be provided by element if available', () => {
+      markElementScheduledForTesting(window, 'element-1');
+      const p1 = getElementServiceIfAvailable(window, 'e1', 'element-1');
+      const p2 = getElementServiceIfAvailable(window, 'e2', 'not-available');
+      getService(window, 'e1', function() {
+        return 'from e1';
+      });
+      return p1.then(s1 => {
+        expect(s1).to.equal('from e1');
+        return p2.then(s2 => {
+          expect(s2).to.be.null;
+        });
       });
     });
   });

@@ -41,6 +41,15 @@ var forbiddenTerms = {
   'DO NOT SUBMIT': '',
   'describe\\.only': '',
   'it\\.only': '',
+  'sinon\\.(spy|stub|mock)\\(\\w[^)]*\\)': {
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+  },
+  '(\\w*([sS]py|[sS]tub|[mM]ock|clock).restore)': {
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+  },
+  'sinon\\.useFakeTimers': {
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+  },
   'console\\.\\w+\\(': {
     message: 'If you run against this, use console/*OK*/.log to ' +
       'whitelist a legit case.',
@@ -130,6 +139,7 @@ var forbiddenTerms = {
   'cidFor': {
     message: requiresReviewPrivacy,
     whitelist: [
+      'builtins/amp-ad.js',
       'src/cid.js',
       'src/service/cid-impl.js',
       'src/url-replacements.js',
@@ -188,6 +198,7 @@ var forbiddenTerms = {
     message: requiresReviewPrivacy,
     whitelist: [
       'src/storage.js',
+      'extensions/amp-user-notification/0.1/amp-user-notification.js',
     ],
   },
   'localStorage': {
