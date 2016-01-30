@@ -31,6 +31,7 @@ var rename = require('gulp-rename');
 var replace = require('gulp-replace');
 var source = require('vinyl-source-stream');
 var sourcemaps = require('gulp-sourcemaps');
+var touch = require('touch')
 var uglify = require('gulp-uglify');
 var util = require('gulp-util');
 var watchify = require('watchify');
@@ -120,11 +121,13 @@ function compile(watch, shouldMinify) {
   compileJs('./src/', 'amp-babel.js', './dist', {
     toName: 'amp.js',
     minifiedName: 'v0.js',
+    includePolyfills: true,
     watch: watch,
     minify: shouldMinify,
     // If there is a sync JS error during initial load,
     // at least try to unhide the body.
-    wrapper: 'try{<%= contents %>}catch(e){setTimeout(function(){' +
+    wrapper: 'try{(function(){<%= contents %>})()}catch(e){' +
+        'setTimeout(function(){' +
         'var s=document.body.style;' +
         's.opacity=1;' +
         's.visibility="visible";' +
@@ -314,6 +317,7 @@ function buildExamples(watch) {
   buildExample('analytics-notification.amp.html');
   buildExample('analytics.amp.html');
   buildExample('article.amp.html');
+  buildExample('responsive.amp.html');
   buildExample('article-access.amp.html');
   buildExample('csp.amp.html');
   buildExample('metadata-examples/article-json-ld.amp.html');
@@ -443,6 +447,10 @@ function compileJs(srcDir, srcFilename, destDir, options) {
     bundler.on('update', function() {
       console.log('-> bundling ' + srcDir + '...');
       rebundle();
+      // Touch file in unit test set. This triggers rebundling of tests because
+      // karma only considers changes to tests files themselves re-bundle
+      // worthy.
+      touch('test/_init_tests.js');
     });
   }
 
