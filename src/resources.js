@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-import {getService} from './service';
+import {getExistingServiceForDoc} from './service';
+
 
 /**
- * @param {!Window} window
- * @return {!Resources}
+ * @param {!Node|!./service/ampdoc-impl.AmpDoc} nodeOrDoc
+ * @return {!./service/resources-impl.Resources}
  */
-export function resourcesFor(window) {
-  return getService(window, 'resources');
+export function resourcesForDoc(nodeOrDoc) {
+  return /** @type {!./service/resources-impl.Resources} */ (
+      getExistingServiceForDoc(nodeOrDoc, 'resources'));
 };

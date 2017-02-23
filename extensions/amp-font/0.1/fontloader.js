@@ -38,7 +38,7 @@ const TOLERANCE_ = 2;
 
 
 import {removeElement} from '../../../src/dom';
-import {timer} from '../../../src/timer';
+import {timerFor} from '../../../src/timer';
 import {vsyncFor} from '../../../src/vsync';
 import * as style from '../../../src/style';
 
@@ -79,14 +79,16 @@ export class FontLoader {
    */
   load(fontConfig, timeout) {
     this.fontConfig_ = fontConfig;
-    return timer.timeoutPromise(timeout, this.load_()).then(() => {
-      this.fontLoadResolved_ = true;
-      this.dispose_();
-    }).catch(reason => {
-      this.fontLoadRejected_ = true;
-      this.dispose_();
-      throw reason;
-    });
+    return timerFor(this.win_)
+        .timeoutPromise(timeout, this.load_())
+        .then(() => {
+          this.fontLoadResolved_ = true;
+          this.dispose_();
+        }, reason => {
+          this.fontLoadRejected_ = true;
+          this.dispose_();
+          throw reason;
+        });
   }
 
 
@@ -104,8 +106,8 @@ export class FontLoader {
         this.fontConfig_.style + ' ' +
         this.fontConfig_.variant + ' ' +
         this.fontConfig_.weight + ' ' +
-        this.fontConfig_.size + ' ' +
-        this.fontConfig_.family);
+        this.fontConfig_.size + ' \'' +
+        this.fontConfig_.family + '\'');
 
       if (this.canUseNativeApis_()) {
         // Check if font already exists.
@@ -114,6 +116,10 @@ export class FontLoader {
         } else {
           // Load font with native api if supported.
           this.document_.fonts.load(fontString).then(() => {
+            // Workaround for chrome bug
+            // https://bugs.chromium.org/p/chromium/issues/detail?id=347460
+            return this.document_.fonts.load(fontString);
+          }).then(() => {
             if (this.document_.fonts.check(fontString)) {
               resolve();
             } else {
@@ -163,7 +169,7 @@ export class FontLoader {
           } else {
             vsyncTask();
           }
-        }
+        },
       });
       vsyncTask();
     });
@@ -183,13 +189,15 @@ export class FontLoader {
       // Use larger font-size to better detect font load.
       fontSize: '40px',
       fontVariant: this.fontConfig_.variant,
+      fontWeight: this.fontConfig_.weight,
+      fontStyle: this.fontConfig_.style,
       left: '-999px',
       lineHeight: 'normal',
       margin: 0,
       padding: 0,
       position: 'absolute',
       top: '-999px',
-      visibility: 'hidden'
+      visibility: 'hidden',
     });
     this.defaultFontElements_ = [];
     DEFAULT_FONTS_.forEach(font => {
@@ -197,10 +205,11 @@ export class FontLoader {
       this.defaultFontElements_.push(defaultFontElement);
       defaultFontElement.textContent = TEST_STRING_;
       style.setStyles(defaultFontElement, {
+        float: 'left',
         fontFamily: font,
         margin: 0,
         padding: 0,
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
       });
       containerElement.appendChild(defaultFontElement);
     });
@@ -209,10 +218,11 @@ export class FontLoader {
     const customFontElement = this.customFontElement_ =
         this.document_.createElement('div');
     style.setStyles(customFontElement, {
-      fontFamily: this.fontConfig_.family,
+      float: 'left',
+      fontFamily: this.fontConfig_.family + ',' + DEFAULT_FONTS_.join(),
       margin: 0,
       padding: 0,
-      whiteSpace: 'nowrap'
+      whiteSpace: 'nowrap',
     });
     customFontElement.textContent = TEST_STRING_;
     containerElement.appendChild(customFontElement);

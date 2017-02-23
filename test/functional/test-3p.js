@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
-import {validateSrcPrefix, validateSrcContains, checkData, validateData}
-    from '../../src/3p';
+import {
+  computeInMasterFrame,
+  validateSrcPrefix,
+  validateSrcContains,
+  nextTick,
+  validateData,
+  loadScript,
+} from '../../3p/3p';
 import * as sinon from 'sinon';
 
 describe('3p', () => {
@@ -33,14 +39,28 @@ describe('3p', () => {
     sandbox.restore();
   });
 
-  it('should throw an error if prefix is not https:', () => {
-    expect(() => {
-      validateSrcPrefix('https:', 'http://adserver.adtechus.com');
-    }).to.throw(/Invalid src/);
-  });
+  describe('validateSrcPrefix()', () => {
 
-  it('should not throw if source starts with https', () => {
-    validateSrcPrefix('https:', 'https://adserver.adtechus.com');
+    it('should throw when a string prefix does not match', () => {
+      expect(() => {
+        validateSrcPrefix('https:', 'http://example.org');
+      }).to.throw(/Invalid src/);
+    });
+
+    it('should throw when array prefixes do not match', () => {
+      expect(() => {
+        validateSrcPrefix(['https:', 'ftp:'], 'http://example.org');
+      }).to.throw(/Invalid src/);
+    });
+
+    it('should not throw when a string prefix matches', () => {
+      validateSrcPrefix('http:', 'http://example.org');
+    });
+
+    it('should not throw when any of the array prefixes match', () => {
+      validateSrcPrefix(['https:', 'http:'], 'http://example.org');
+      validateSrcPrefix(['http:', 'https:'], 'http://example.org');
+    });
   });
 
   it('should throw an error if src does not contain addyn', () => {
@@ -53,48 +73,199 @@ describe('3p', () => {
     validateSrcContains('/addyn/', 'http://adserver.adtechus.com/addyn/');
   });
 
-  it('should accept good host supplied data', () => {
-    checkData({
-      width: '',
-      height: false,
-      initialWindowWidth: 1,
-      initialWindowHeight: 2,
-      type: true,
-      referrer: true,
-      canonicalUrl: true,
-      pageViewId: true,
-      location: true,
-      mode: true,
-    }, []);
-    clock.tick(1);
+  describe('validateData', () => {
 
-    checkData({
-      width: "",
-      foo: true,
-      bar: true,
-    }, ['foo', 'bar']);
-    clock.tick(1);
-  });
-
-  it('should complain about unexpected args', () => {
-    checkData({
-      type: 'TEST',
-      foo: true,
-      'not-whitelisted': true,
-    }, ['foo']);
-    expect(() => {
+    it('should check mandatory fields', () => {
+      validateData({
+        width: '',
+        height: false,
+        type: 'taboola',
+        referrer: true,
+        canonicalUrl: true,
+        pageViewId: true,
+        location: true,
+        mode: true,
+      }, []);
       clock.tick(1);
-    }).to.throw(/Unknown attribute for TEST: not-whitelisted./);
 
+      validateData({
+        width: '',
+        type: 'taboola',
+        foo: true,
+        bar: true,
+      }, ['foo', 'bar']);
+      clock.tick(1);
 
-    expect(() => {
-      // Sync throw, not validateData vs. checkData
+      expect(() => {
+        validateData({
+          width: '',
+          type: 'xxxxxx',
+          foo: true,
+          bar: true,
+        }, ['foo', 'bar', 'persika']);
+      }).to.throw(/Missing attribute for xxxxxx: persika./);
+
+      expect(() => {
+        validateData({
+          width: '',
+          type: 'xxxxxx',
+          foo: true,
+          bar: true,
+        }, [['red', 'green', 'blue']]);
+      }).to.throw(
+          /xxxxxx must contain exactly one of attributes: red, green, blue./);
+    });
+
+    it('should check mandatory fields with alternative options', () => {
+      validateData({
+        width: '',
+        type: 'taboola',
+        foo: true,
+        bar: true,
+      }, [['foo', 'day', 'night']]);
+      clock.tick(1);
+    });
+
+    it('should check optional fields', () => {
+      validateData({
+        width: '',
+        height: false,
+        type: true,
+        referrer: true,
+        canonicalUrl: true,
+        pageViewId: true,
+        location: true,
+        mode: true,
+      }, /* mandatory */[], /* optional */[]);
+      clock.tick(1);
+
+      validateData({
+        width: '',
+        foo: true,
+        bar: true,
+      }, /* mandatory */[], ['foo', 'bar']);
+      clock.tick(1);
+
       validateData({
         type: 'TEST',
         foo: true,
-        'not-whitelisted2': true,
-      }, ['not-whitelisted', 'foo']);
-    }).to.throw(/Unknown attribute for TEST: not-whitelisted2./);
-  });
-});
+        'not-whitelisted': true,
+      }, [], ['foo']);
 
+      expect(() => {
+        clock.tick(1);
+      }).to.throw(/Unknown attribute for TEST: not-whitelisted./);
+    });
+
+    it('should check mandatory and optional fields', () => {
+      validateData({
+        width: '',
+        foo: true,
+        bar: true,
+        halo: 'world',
+      }, [['foo', 'fo'], 'bar'], ['halo']);
+    });
+  });
+
+  it('should run in next tick', () => {
+    let called = 0;
+    nextTick(window, () => {
+      called++;
+    });
+    return Promise.resolve(() => {
+      expect(called).to.equal(1);
+    });
+  });
+
+  it('should run in next tick (setTimeout)', () => {
+    let called = 0;
+    nextTick({
+      setTimeout: fn => {
+        fn();
+      },
+    }, () => {
+      called++;
+    });
+    expect(called).to.equal(1);
+  });
+
+  it('should do work only in master', () => {
+    const taskId = 'exampleId';
+    const master = {
+      context: {
+        isMaster: true,
+      },
+    };
+    master.context.master = master;
+    const slave0 = {
+      context: {
+        isMaster: false,
+        master,
+      },
+    };
+    const slave1 = {
+      context: {
+        isMaster: false,
+        master,
+      },
+    };
+    const slave2 = {
+      context: {
+        isMaster: false,
+        master,
+      },
+    };
+    let done;
+    let workCalls = 0;
+    const work = d => {
+      workCalls++;
+      done = d;
+    };
+    let progress = '';
+    const frame = id => {
+      return result => {
+        progress += result + id;
+      };
+    };
+    computeInMasterFrame(slave0, taskId, work, frame('slave0'));
+    expect(workCalls).to.equal(0);
+    computeInMasterFrame(master, taskId, work, frame('master'));
+    expect(workCalls).to.equal(1);
+    computeInMasterFrame(slave1, taskId, work, frame('slave1'));
+    expect(progress).to.equal('');
+    done(';');
+    expect(progress).to.equal(';slave0;master;slave1');
+    computeInMasterFrame(slave2, taskId, work, frame('slave2'));
+    expect(progress).to.equal(';slave0;master;slave1;slave2');
+    expect(workCalls).to.equal(1);
+  });
+
+  describe('loadScript', () => {
+
+    it('should add <script /> with url to the body', () => {
+      const url = 'http://test.com/example.js';
+      let s = window.document.body.querySelector(`script[src="${url}"]`);
+      expect(s).to.equal(null);
+      loadScript(window, url);
+      s = window.document.body.querySelector(`script[src="${url}"]`);
+      expect(s.src).to.equal(url);
+    });
+
+    it('should handle onSuccess callback', done => {
+      loadScript(window, 'http://localhost:9876/test/functional/test-3p.js', () => {
+        done();
+      }, () => {
+        done('onError should not be called!');
+      });
+    });
+
+    it('should handle onFailure callback', done => {
+      loadScript(window, 'http://localhost:9876/404', () => {
+        done('onSuccess should not be called');
+      }, () => {
+        done();
+      });
+    });
+  });
+
+});

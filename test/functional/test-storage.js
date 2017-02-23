@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-import {Storage, Store, LocalStorageBinding, ViewerStorageBinding} from
-    '../../src/service/storage-impl';
-import {all} from '../../src/promise';
+import {AmpDocSingle} from '../../src/service/ampdoc-impl';
+import {
+  Storage,
+  Store,
+  LocalStorageBinding,
+  ViewerStorageBinding,
+} from '../../src/service/storage-impl';
+import {dev} from '../../src/log';
 import * as sinon from 'sinon';
 
 
@@ -28,6 +33,7 @@ describe('Storage', () => {
   let viewer;
   let viewerMock;
   let windowApi;
+  let ampdoc;
   let viewerBroadcastHandler;
 
   beforeEach(() => {
@@ -38,16 +44,15 @@ describe('Storage', () => {
       onBroadcast: handler => {
         viewerBroadcastHandler = handler;
       },
-      broadcast: () => {}
+      broadcast: () => {},
     };
     viewerMock = sandbox.mock(viewer);
 
     windowApi = {
-      document: {
-        cookie: 'AMP_EXP=amp-storage'
-      },
+      document: {},
       location: 'https://acme.com/document1',
     };
+    ampdoc = new AmpDocSingle(windowApi);
 
     binding = {
       loadBlob: () => {},
@@ -55,13 +60,12 @@ describe('Storage', () => {
     };
     bindingMock = sandbox.mock(binding);
 
-    storage = new Storage(windowApi, viewer, binding);
+    storage = new Storage(ampdoc, viewer, binding);
     storage.start_();
   });
 
   afterEach(() => {
     sandbox.restore();
-    sandbox = null;
   });
 
   function expectStorage(keyValues) {
@@ -72,19 +76,8 @@ describe('Storage', () => {
         expect(value).to.equal(expectedValue, `For "${k}"`);
       }));
     }
-    return all(list);
+    return Promise.all(list);
   }
-
-  it('should initialize with experiment', () => {
-    expect(viewerBroadcastHandler).to.exist;
-  });
-
-  it('should not initialize without experiment', () => {
-    viewerBroadcastHandler = undefined;
-    windowApi.document.cookie = '';
-    new Storage(windowApi, viewer, binding).start_();
-    expect(viewerBroadcastHandler).to.not.exist;
-  });
 
   it('should configure store correctly', () => {
     const store1 = new Store({});
@@ -98,6 +91,35 @@ describe('Storage', () => {
       return storage.storePromise_;
     }).then(store => {
       expect(store.maxValues_).to.equal(8);
+    });
+  });
+
+  it('should initialize empty store with prototype-less objects', () => {
+    bindingMock.expects('loadBlob')
+        .withExactArgs('https://acme.com')
+        .returns(Promise.resolve(null))
+        .once();
+    return storage.get('key1').then(() => {
+      return storage.storePromise_;
+    }).then(store => {
+      expect(store.obj.__proto__).to.be.undefined;
+      expect(store.values_.__proto__).to.be.undefined;
+    });
+  });
+
+  it('should restore store with prototype-less objects', () => {
+    const store1 = new Store({});
+    store1.set('key1', 'value1');
+    store1.set('key2', 'value2');
+    bindingMock.expects('loadBlob')
+        .withExactArgs('https://acme.com')
+        .returns(Promise.resolve(btoa(JSON.stringify(store1.obj))))
+        .once();
+    return storage.get('key1').then(() => {
+      return storage.storePromise_;
+    }).then(store => {
+      expect(store.obj.__proto__).to.be.undefined;
+      expect(store.values_.__proto__).to.be.undefined;
     });
   });
 
@@ -264,7 +286,7 @@ describe('Storage', () => {
       // Issue broadcast event.
       viewerBroadcastHandler({
         'type': 'amp-storage-reset',
-        'origin': 'https://acme.com'
+        'origin': 'https://acme.com',
       });
       expect(storage.storePromise_).to.not.exist;
       return storage.get('key1').then(value => {
@@ -289,7 +311,7 @@ describe('Storage', () => {
       // Issue broadcast event.
       viewerBroadcastHandler({
         'type': 'amp-storage-reset',
-        'origin': 'OTHER'
+        'origin': 'OTHER',
       });
       expect(storage.storePromise_).to.exist;
     });
@@ -309,9 +331,7 @@ describe('Store', () => {
   });
 
   afterEach(() => {
-    clock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
   it('should get undefined with empty store', () => {
@@ -330,7 +350,7 @@ describe('Store', () => {
     expect(store.values_['key1']['t']).to.equal(101);
     expect(store.values_).to.deep.equal({
       'key2': {v: 'value2', t: 0},
-      'key1': {v: 'value1', t: 101}
+      'key1': {v: 'value1', t: 101},
     });
   });
 
@@ -345,7 +365,7 @@ describe('Store', () => {
     expect(store.values_['key2']['t']).to.equal(0);
     expect(store.values_).to.deep.equal({
       'key1': {v: 'value1b', t: 101},
-      'key2': {v: 'value2', t: 0}
+      'key2': {v: 'value2', t: 0},
     });
   });
 
@@ -360,7 +380,7 @@ describe('Store', () => {
     expect(Object.keys(store.values_).length).to.equal(1);
     expect(store.values_['key2']['t']).to.equal(0);
     expect(store.values_).to.deep.equal({
-      'key2': {v: 'value2', t: 0}
+      'key2': {v: 'value2', t: 0},
     });
   });
 
@@ -391,6 +411,15 @@ describe('Store', () => {
     expect(store.get('k1')).to.be.undefined;
     expect(store.get('k2')).to.be.undefined;
   });
+
+  it('should prohibit unsafe values', () => {
+    expect(() => {
+      store.set('__proto__', 'value1');
+    }).to.throw(/Name is not allowed/);
+    expect(() => {
+      store.set('prototype', 'value1');
+    }).to.throw(/Name is not allowed/);
+  });
 });
 
 
@@ -406,7 +435,7 @@ describe('LocalStorageBinding', () => {
       localStorage: {
         getItem: () => {},
         setItem: () => {},
-      }
+      },
     };
     localStorageMock = sandbox.mock(windowApi.localStorage);
     binding = new LocalStorageBinding(windowApi);
@@ -414,7 +443,19 @@ describe('LocalStorageBinding', () => {
 
   afterEach(() => {
     sandbox.restore();
-    sandbox = null;
+  });
+
+  it('should throw if localStorage is not supported', () => {
+    const errorSpy = sandbox.spy(dev(), 'expectedError');
+
+    expect(errorSpy).to.have.not.been.called;
+    new LocalStorageBinding(windowApi);
+    expect(errorSpy).to.have.not.been.called;
+
+    delete windowApi.localStorage;
+    new LocalStorageBinding(windowApi);
+    expect(errorSpy).to.be.calledOnce;
+    expect(errorSpy.args[0][1].message).to.match(/localStorage not supported/);
   });
 
   it('should load store when available', () => {
@@ -437,7 +478,8 @@ describe('LocalStorageBinding', () => {
     });
   });
 
-  it('should reject on local storage failure', () => {
+  it('should reject on local storage failure w/ localStorage support', () => {
+    binding.isLocalStorageSupported_ = true;
     localStorageMock.expects('getItem')
         .withExactArgs('amp-store:https://acme.com')
         .throws(new Error('unknown'))
@@ -445,6 +487,31 @@ describe('LocalStorageBinding', () => {
     return binding.loadBlob('https://acme.com')
         .then(() => 'SUCCESS', () => 'ERROR').then(res => {
           expect(res).to.equal('ERROR');
+        });
+  });
+
+  it('should succeed loadBlob w/o localStorage support', () => {
+    binding.isLocalStorageSupported_ = false;
+    localStorageMock.expects('getItem')
+        .withExactArgs('amp-store:https://acme.com')
+        .throws(new Error('unknown'))
+        .once();
+    return binding.loadBlob('https://acme.com')
+        .then(res => `SUCCESS ${res}`, () => 'ERROR').then(res => {
+          // Resolves with null
+          expect(res).to.equal('SUCCESS null');
+        });
+  });
+
+  it('should bypass loading from localStorage if getItem throws', () => {
+    localStorageMock.expects('getItem')
+        .throws(new Error('unknown'))
+        .once();
+    binding = new LocalStorageBinding(windowApi);
+    localStorageMock.expects('getItem').never();
+    return binding.loadBlob('https://acme.com')
+        .then(() => 'SUCCESS', () => 'ERROR').then(res => {
+          expect(res).to.equal('SUCCESS');
         });
   });
 
@@ -465,6 +532,34 @@ describe('LocalStorageBinding', () => {
           expect(res).to.equal('ERROR');
         });
   });
+
+  it('should succeed saveBlob w/o localStorage support', () => {
+    binding.isLocalStorageSupported_ = false;
+    localStorageMock.expects('setItem')
+        .withExactArgs('amp-store:https://acme.com', 'BLOB1')
+        .throws(new Error('unknown'))
+        .once();
+    // Never reaches setItem
+    return binding.saveBlob('https://acme.com', 'BLOB1')
+        .then(() => 'SUCCESS', () => `ERROR`).then(res => {
+          expect(res).to.equal('SUCCESS');
+        });
+  });
+
+  it('should bypass saving to localStorage if getItem throws', () => {
+    const setItemSpy = sandbox.spy(windowApi.localStorage, 'setItem');
+
+    localStorageMock.expects('getItem')
+        .throws(new Error('unknown'))
+        .once();
+    binding = new LocalStorageBinding(windowApi);
+    // Never reaches setItem
+    return binding.saveBlob('https://acme.com', 'BLOB1')
+        .then(() => 'SUCCESS', () => `ERROR`).then(res => {
+          expect(setItemSpy).to.have.not.been.called;
+          expect(res).to.equal('SUCCESS');
+        });
+  });
 });
 
 
@@ -477,7 +572,7 @@ describe('ViewerStorageBinding', () => {
   beforeEach(() => {
     sandbox = sinon.sandbox.create();
     viewer = {
-      sendMessage: () => {}
+      sendMessageAwaitResponse: () => {},
     };
     viewerMock = sandbox.mock(viewer);
     binding = new ViewerStorageBinding(viewer);
@@ -485,14 +580,13 @@ describe('ViewerStorageBinding', () => {
 
   afterEach(() => {
     sandbox.restore();
-    sandbox = null;
   });
 
   it('should load store from viewer', () => {
-    viewerMock.expects('sendMessage')
+    viewerMock.expects('sendMessageAwaitResponse')
         .withExactArgs('loadStore', sinon.match(arg => {
           return (arg['origin'] == 'https://acme.com');
-        }), true)
+        }))
         .returns(Promise.resolve({'blob': 'BLOB1'}))
         .once();
     return binding.loadBlob('https://acme.com').then(blob => {
@@ -501,10 +595,10 @@ describe('ViewerStorageBinding', () => {
   });
 
   it('should load default store when not yet available', () => {
-    viewerMock.expects('sendMessage')
+    viewerMock.expects('sendMessageAwaitResponse')
         .withExactArgs('loadStore', sinon.match(arg => {
           return (arg['origin'] == 'https://acme.com');
-        }), true)
+        }))
         .returns(Promise.resolve({}))
         .once();
     return binding.loadBlob('https://acme.com').then(blob => {
@@ -513,10 +607,10 @@ describe('ViewerStorageBinding', () => {
   });
 
   it('should reject on viewer failure', () => {
-    viewerMock.expects('sendMessage')
+    viewerMock.expects('sendMessageAwaitResponse')
         .withExactArgs('loadStore', sinon.match(arg => {
           return (arg['origin'] == 'https://acme.com');
-        }), true)
+        }))
         .returns(Promise.reject('unknown'))
         .once();
     return binding.loadBlob('https://acme.com')
@@ -526,19 +620,19 @@ describe('ViewerStorageBinding', () => {
   });
 
   it('should save store', () => {
-    viewerMock.expects('sendMessage')
+    viewerMock.expects('sendMessageAwaitResponse')
         .withExactArgs('saveStore', sinon.match(arg => {
           return (arg['origin'] == 'https://acme.com' &&
               arg['blob'] == 'BLOB1');
-        }), true)
+        }))
         .returns(Promise.resolve())
         .once();
     return binding.saveBlob('https://acme.com', 'BLOB1');
   });
 
   it('should reject on save store failure', () => {
-    viewerMock.expects('sendMessage')
-        .withExactArgs('saveStore', sinon.match(() => true), true)
+    viewerMock.expects('sendMessageAwaitResponse')
+        .withExactArgs('saveStore', sinon.match(() => true))
         .returns(Promise.reject('unknown'))
         .once();
     return binding.saveBlob('https://acme.com', 'BLOB1')

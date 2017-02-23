@@ -15,20 +15,35 @@
  */
 
 
-import {getIframe, prefetchBootstrap} from '../../../src/3p-frame';
+import {getIframe, preloadBootstrap} from '../../../src/3p-frame';
 import {isLayoutSizeDefined} from '../../../src/layout';
-import {listen} from '../../../src/iframe-helper';
-import {loadPromise} from '../../../src/event-helper';
+import {listenFor} from '../../../src/iframe-helper';
+import {removeElement} from '../../../src/dom';
 
 
 class AmpTwitter extends AMP.BaseElement {
-  /** @override */
-  preconnectCallback(onLayout) {
+
+  /** @param {!AmpElement} element */
+  constructor(element) {
+    super(element);
+
+    /** @private {?HTMLIFrameElement} */
+    this.iframe_ = null;
+  }
+
+  /**
+   * @param {boolean=} opt_onLayout
+   * @override
+   */
+  preconnectCallback(opt_onLayout) {
     // This domain serves the actual tweets as JSONP.
-    this.preconnect.url('https://syndication.twitter.com', onLayout);
+    this.preconnect.url('https://syndication.twitter.com', opt_onLayout);
+    // All images
+    this.preconnect.url('https://pbs.twimg.com', opt_onLayout);
     // Hosts the script that renders tweets.
-    this.preconnect.prefetch('https://platform.twitter.com/widgets.js');
-    prefetchBootstrap(this.getWin());
+    this.preconnect.preload(
+        'https://platform.twitter.com/widgets.js', 'script');
+    preloadBootstrap(this.win, this.preconnect);
   }
 
   /** @override */
@@ -37,22 +52,37 @@ class AmpTwitter extends AMP.BaseElement {
   }
 
   /** @override */
+  firstLayoutCompleted() {
+    // Do not hide placeholder
+  }
+
+  /** @override */
   layoutCallback() {
-    // TODO(malteubl): Preconnect to twitter.
-    const iframe = getIframe(this.element.ownerDocument.defaultView,
-        this.element, 'twitter');
+    const iframe = getIframe(this.win, this.element, 'twitter');
     this.applyFillContent(iframe);
-    this.element.appendChild(iframe);
-    // Triggered by context.updateDimensions() inside the iframe.
-    listen(iframe, 'embed-size', data => {
-      iframe.height = data.height;
-      iframe.width = data.width;
-      const amp = iframe.parentElement;
-      amp.setAttribute('height', data.height);
-      amp.setAttribute('width', data.width);
+    listenFor(iframe, 'embed-size', data => {
+      // We only get the message if and when there is a tweet to display,
+      // so hide the placeholder.
+      this.togglePlaceholder(false);
       this./*OK*/changeHeight(data.height);
     }, /* opt_is3P */true);
-    return loadPromise(iframe);
+    this.element.appendChild(iframe);
+    this.iframe_ = iframe;
+    return this.loadPromise(iframe);
+  }
+
+  /** @override */
+  unlayoutOnPause() {
+    return true;
+  }
+
+  /** @override */
+  unlayoutCallback() {
+    if (this.iframe_) {
+      removeElement(this.iframe_);
+      this.iframe_ = null;
+    }
+    return true;
   }
 };
 

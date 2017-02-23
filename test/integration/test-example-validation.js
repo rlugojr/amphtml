@@ -30,13 +30,15 @@ if (!window.validatorLoad) {
   })();
 }
 
-describe('example', function() {
+describe.configure().retryOnSaucelabs().run('example', function() {
   // TODO(@cramforce): Remove when test is hermetic.
   this.timeout(5000);
 
   const examples = [
     'ads.amp.html',
+    'brid-player.amp.html',
     'brightcove.amp.html',
+    'dailymotion.amp.html',
     'metadata-examples/article-json-ld.amp.html',
     'metadata-examples/article-microdata.amp.html',
     'metadata-examples/recipe-json-ld.amp.html',
@@ -45,12 +47,22 @@ describe('example', function() {
     'metadata-examples/review-microdata.amp.html',
     'metadata-examples/video-json-ld.amp.html',
     'metadata-examples/video-microdata.amp.html',
+    'a4a.amp.html',
     'article.amp.html',
+    'analytics.amp.html',
+    'analytics-notification.amp.html',
     'everything.amp.html',
+    'facebook.amp.html',
+    'gfycat.amp.html',
     'instagram.amp.html',
+    'ooyalaplayer.amp.html',
     'released.amp.html',
+    'soundcloud.amp.html',
+    'springboard-player.amp.html',
     'twitter.amp.html',
     'vine.amp.html',
+    'vimeo.amp.html',
+    'old-boilerplate.amp.html',
   ];
 
   /**
@@ -62,7 +74,7 @@ describe('example', function() {
    * @constructor {!Array<!RegExp>}
    */
   const errorWhitelist = [
-    /invalid value \'.\/viewer-integr.js\'/,
+    /DISALLOWED_TAG content/,  // Experiments with shadow slots
   ];
 
   const usedWhitelist = [];
@@ -73,36 +85,32 @@ describe('example', function() {
 
   examples.forEach(filename => {
     it(filename + ' should validate', () => {
-      const url = '/base/examples/' + filename;
+      const url = '/examples/' + filename;
       return get(url).then(html => {
+        /* global amp: false */
         const validationResult = amp.validator.validateString(html);
-        const rendered = amp.validator.renderValidationResult(validationResult,
-            url);
-
         const errors = [];
-        if (rendered[0] == 'FAIL') {
-          for (let i = 1; i < rendered.length; i++) {
-            const line = rendered[i];
-            if (/DEV_MODE_ENABLED/.test(line)) {
-              // This error is expected since we have to be in dev mode to
-              // run the validator. It is only a warning and we'd probably
-              // see that by looking for PASS / FAIL. By itself it doesn't
-              // make things fail.
-              // TODO(johannes): Add warning prefixes to such events so they
-              // can be detected systematically.
+        if (validationResult.status == 'FAIL') {
+          for (let i = 0; i < validationResult.errors.length; i++) {
+            const error = validationResult.errors[i];
+            if (error.severity != 'ERROR') {
               continue;
             }
+            const errorText = error.code +
+                (error.params ? ' ' + error.params.join(' ') : '') +
+                (error.dataAmpReportTestValue ?
+                    ' ' + error.dataAmpReportTestValue : '');
             let whitelisted = false;
             for (let n = 0; n < errorWhitelist.length; n++) {
               const ok = errorWhitelist[n];
-              if (ok.test(line)) {
+              if (ok.test(errorText)) {
                 whitelisted = true;
                 usedWhitelist.push(ok);
                 break;
               }
             }
             if (!whitelisted) {
-              errors.push(line);
+              errors.push(errorText);
             }
           }
         }
@@ -135,7 +143,7 @@ describe('example', function() {
           }
         }
       };
-      xhr.open("GET", filename, true);
+      xhr.open('GET', filename, true);
       xhr.send();
     });
   }

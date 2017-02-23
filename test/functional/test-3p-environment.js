@@ -14,14 +14,20 @@
  * limitations under the License.
  */
 
-import {becomeVisible, manageWin, setInViewportForTesting} from
-    '../../3p/environment';
+import {
+  manageWin,
+  setInViewportForTesting,
+} from '../../3p/environment';
 import {createIframePromise} from '../../testing/iframe';
-import {timer} from '../../src/timer';
+import {timerFor} from '../../src/timer';
 import {loadPromise} from '../../src/event-helper';
 import * as lolex from 'lolex';
 
 describe('3p environment', () => {
+
+  let testWin;
+  let iframeCount;
+  const timer = timerFor(window);
 
   beforeEach(() => {
     iframeCount = 0;
@@ -103,18 +109,18 @@ describe('3p environment', () => {
     function installTimer(win) {
       progress = '';
       clock = lolex.install(win);
-      // The clock does not override this.
-      win.requestAnimationFrame = function(fn) {
-        return win.setTimeout(fn, 16);
-      };
-      win.cancelAnimationFrame = function(id) {
-        win.clearTimeout(id);
-      };
+      return clock;
     }
 
     function add(p) {
-      return function() {
+      return function(a, b) {
         progress += p;
+        if (a) {
+          progress += a;
+        }
+        if (b) {
+          progress += b;
+        }
       };
     }
 
@@ -176,33 +182,35 @@ describe('3p environment', () => {
       clock.tick(20);
       expect(progress).to.equal(
           'aaaaaaaaabaaaaaaaaaacbaabcaaaaaaaaaaaaaaaaaababb');
+      testWin.ran = false;
+      testWin.setInterval('ran=true', 1);
+      clock.tick(1);
+      expect(window.ran).to.be.equal(undefined);
+      expect(testWin.ran).to.be.true;
     });
 
-    it('throttle requestAnimationFrame', () => {
+    it('should support multi arg forms', () => {
       installTimer(testWin);
       manageWin(testWin);
-      testWin.requestAnimationFrame(add('a'));
-      testWin.requestAnimationFrame(add('b'));
-      clock.tick(16);
-      clock.tick(16);
-      expect(progress).to.equal('ab');
-      setInViewportForTesting(false);
-      testWin.requestAnimationFrame(add('a'));
-      testWin.requestAnimationFrame(add('b'));
-      const f0 = testWin.requestAnimationFrame(add('CANCEL0'));
-      testWin.cancelAnimationFrame(f0);
-      clock.tick(5000);
-      expect(progress).to.equal('ab');
-      setInViewportForTesting(true);
-      becomeVisible();
-      clock.tick(16);
-      expect(progress).to.equal('abab');
-      testWin.requestAnimationFrame(add('a'));
-      testWin.requestAnimationFrame(add('b'));
-      const f1 = testWin.requestAnimationFrame(add('CANCEL1'));
-      testWin.cancelAnimationFrame(f1);
-      clock.tick(16);
-      expect(progress).to.equal('ababab');
+      testWin.setTimeout(add('a'), 50, '!', '?');
+      testWin.setTimeout(add('b'), 60, 'B');
+      testWin.setInterval(add('i'), 70, 'X', 'Z');
+      clock.tick(140);
+      expect(progress).to.equal('a!?bBiXZiXZ');
+    });
+
+    it('should cancel uninstrumented timeouts', () => {
+      installTimer(testWin);
+      const timeout = testWin.setTimeout(() => {
+        throw new Error('should not happen: timeout');
+      }, 0);
+      const interval = testWin.setInterval(() => {
+        throw new Error('should not happen: interval');
+      }, 0);
+      manageWin(testWin);
+      testWin.clearTimeout(timeout);
+      testWin.clearInterval(interval);
+      clock.tick(100);
     });
   });
 
@@ -210,10 +218,16 @@ describe('3p environment', () => {
     expect(win.ampSeen).to.be.true;
     expect(win.setTimeout).to.not.match(/native/);
     expect(win.setInterval).to.not.match(/native/);
-    expect(win.requestAnimationFrame).to.not.match(/native/);
-    if (win.webkitRequestAnimationFrame) {
-      expect(win.webkitRequestAnimationFrame).to.not.match(/native/);
-    }
+    expect(win.alert.toString()).to.not.match(/native/);
+    expect(win.prompt.toString()).to.not.match(/native/);
+    expect(win.confirm.toString()).to.not.match(/native/);
+    expect(win.alert()).to.be.undefined;
+    expect(win.prompt()).to.equal('');
+    expect(win.confirm()).to.be.false;
+    // We only allow 3 calls to these functions.
+    expect(() => win.alert()).to.throw(/security error/);
+    expect(() => win.prompt()).to.throw(/security error/);
+    expect(() => win.confirm()).to.throw(/security error/);
   }
 
   function waitForMutationObserver(iframe) {

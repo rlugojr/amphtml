@@ -19,8 +19,13 @@
  * details.
  */
 
-import {assert} from './asserts';
+import {dev, user} from './log';
+import {isFiniteNumber} from './types';
+import {setStyles} from './style';
+import {isExperimentOn} from './experiments';
 
+/** @const {string} */
+export const UX_EXPERIMENT = 'amp-ad-loading-ux';
 
 /**
  * @enum {string}
@@ -31,7 +36,8 @@ export const Layout = {
   FIXED_HEIGHT: 'fixed-height',
   RESPONSIVE: 'responsive',
   CONTAINER: 'container',
-  FILL: 'fill'
+  FILL: 'fill',
+  FLEX_ITEM: 'flex-item',
 };
 
 
@@ -39,7 +45,7 @@ export const Layout = {
  * CSS Length type. E.g. "1px" or "20vh".
  * @typedef {string}
  */
-let LengthDef;
+export let LengthDef;
 
 
 /**
@@ -62,10 +68,11 @@ let DimensionsDef;
  * @private  Visible for testing only!
  */
 export const naturalDimensions_ = {
-  'AMP-PIXEL': {width: '1px', height: '1px'},
+  'AMP-PIXEL': {width: '0px', height: '0px'},
   'AMP-ANALYTICS': {width: '1px', height: '1px'},
   // TODO(dvoytenko): audio should have width:auto.
-  'AMP-AUDIO': null
+  'AMP-AUDIO': null,
+  'AMP-SOCIAL-SHARE': {width: '60px', height: '44px'},
 };
 
 
@@ -78,12 +85,16 @@ export const naturalDimensions_ = {
 export const LOADING_ELEMENTS_ = {
   'AMP-ANIM': true,
   'AMP-BRIGHTCOVE': true,
+  'AMP-EMBED': true,
   'AMP-IFRAME': true,
   'AMP-IMG': true,
   'AMP-INSTAGRAM': true,
   'AMP-LIST': true,
+  'AMP-OOYALA-PLAYER': true,
   'AMP-PINTEREST': true,
-  'AMP-VIDEO': true
+  'AMP-PLAYBUZZ': true,
+  'AMP-VIDEO': true,
+  'AMP-YOUTUBE': true,
 };
 
 
@@ -107,7 +118,7 @@ export function parseLayout(s) {
  * @return {string}
  */
 export function getLayoutClass(layout) {
-  return '-amp-layout-' + layout;
+  return 'i-amphtml-layout-' + layout;
 }
 
 
@@ -120,7 +131,8 @@ export function isLayoutSizeDefined(layout) {
   return (layout == Layout.FIXED ||
       layout == Layout.FIXED_HEIGHT ||
       layout == Layout.RESPONSIVE ||
-      layout == Layout.FILL);
+      layout == Layout.FILL ||
+      layout == Layout.FLEX_ITEM);
 }
 
 
@@ -148,7 +160,7 @@ export function parseLength(s) {
   if (!s) {
     return undefined;
   }
-  if (!/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax)?$/.test(s)) {
+  if (!/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax|cm|mm|q|in|pc|pt)?$/.test(s)) {
     return undefined;
   }
   if (/^\d+(\.\d+)?$/.test(s)) {
@@ -161,13 +173,14 @@ export function parseLength(s) {
 
 /**
  * Asserts that the supplied value is a non-percent CSS Length value.
- * @param {!LengthDef|string} length
+ * @param {!LengthDef|string|null|undefined} length
  * @return {!LengthDef}
  */
 export function assertLength(length) {
-  assert(/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax)$/.test(length),
+  user().assert(
+      /^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax|cm|mm|q|in|pc|pt)$/.test(length),
       'Invalid length value: %s', length);
-  return length;
+  return /** @type {!LengthDef} */ (length);
 }
 
 
@@ -180,7 +193,7 @@ export function assertLength(length) {
  * @return {!LengthDef}
  */
 export function assertLengthOrPercent(length) {
-  assert(/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax|%)$/.test(length),
+  user().assert(/^\d+(\.\d+)?(px|em|rem|vh|vw|vmin|vmax|%)$/.test(length),
       'Invalid length or percent value: %s', length);
   return length;
 }
@@ -188,12 +201,13 @@ export function assertLengthOrPercent(length) {
 
 /**
  * Returns units from the CSS length value.
- * @param {!LengthDef} length
+ * @param {!LengthDef|string|null|undefined} length
  * @return {string}
  */
 export function getLengthUnits(length) {
   assertLength(length);
-  const m = assert(length.match(/[a-z]+/i),
+  dev().assertString(length);
+  const m = user().assert(length.match(/[a-z]+/i),
       'Failed to read units from %s', length);
   return m[0];
 }
@@ -201,11 +215,12 @@ export function getLengthUnits(length) {
 
 /**
  * Returns the numeric value of a CSS length value.
- * @param {!LengthDef|string} length
- * @return {number}
+ * @param {!LengthDef|string|null|undefined} length
+ * @return {number|undefined}
  */
 export function getLengthNumeral(length) {
-  return parseFloat(length);
+  const res = parseFloat(length);
+  return !isFiniteNumber(res) ? undefined : res;
 }
 
 
@@ -213,7 +228,7 @@ export function getLengthNumeral(length) {
  * Determines whether the tagName is a known element that has natural dimensions
  * in our runtime or the browser.
  * @param {string} tagName The element tag name.
- * @return {DimensionsDef}
+ * @return {boolean}
  */
 export function hasNaturalDimensions(tagName) {
   tagName = tagName.toUpperCase();
@@ -226,27 +241,30 @@ export function hasNaturalDimensions(tagName) {
  * different browser implementations, like <audio> for instance.
  * This operation can only be completed for an element whitelisted by
  * `hasNaturalDimensions`.
- * @param {string} tagName The element tag name.
+ * @param {!Element} element
  * @return {DimensionsDef}
  */
-export function getNaturalDimensions(tagName) {
-  tagName = tagName.toUpperCase();
-  assert(naturalDimensions_[tagName] !== undefined);
+export function getNaturalDimensions(element) {
+  const tagName = element.tagName.toUpperCase();
+  dev().assert(naturalDimensions_[tagName] !== undefined);
   if (!naturalDimensions_[tagName]) {
+    const doc = element.ownerDocument;
     const naturalTagName = tagName.replace(/^AMP\-/, '');
-    const temp = document.createElement(naturalTagName);
+    const temp = doc.createElement(naturalTagName);
     // For audio, should no-op elsewhere.
     temp.controls = true;
-    temp.style.position = 'absolute';
-    temp.style.visibility = 'hidden';
-    document.body.appendChild(temp);
+    setStyles(temp, {
+      position: 'absolute',
+      visibility: 'hidden',
+    });
+    doc.body.appendChild(temp);
     naturalDimensions_[tagName] = {
       width: (temp./*OK*/offsetWidth || 1) + 'px',
-      height: (temp./*OK*/offsetHeight || 1) + 'px'
+      height: (temp./*OK*/offsetHeight || 1) + 'px',
     };
-    document.body.removeChild(temp);
+    doc.body.removeChild(temp);
   }
-  return naturalDimensions_[tagName];
+  return /** @type {DimensionsDef} */ (naturalDimensions_[tagName]);
 }
 
 
@@ -254,9 +272,16 @@ export function getNaturalDimensions(tagName) {
  * Whether the loading can be shown for the specified elemeent. This set has
  * to be externalized since the element's implementation may not be
  * downloaded yet.
- * @param {string} tagName The element tag name.
+ * @param {!Element} element.
  * @return {boolean}
  */
-export function isLoadingAllowed(tagName) {
-  return LOADING_ELEMENTS_[tagName.toUpperCase()] || false;
+export function isLoadingAllowed(element) {
+  const tagName = element.tagName.toUpperCase();
+  if (tagName == 'AMP-AD' || tagName == 'AMP-EMBED') {
+    const win = element.ownerDocument.defaultView;
+    if (isExperimentOn(win, UX_EXPERIMENT)) {
+      return true;
+    }
+  }
+  return LOADING_ELEMENTS_[tagName] || false;
 }

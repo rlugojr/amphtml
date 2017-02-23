@@ -14,29 +14,64 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-### <a name="amp-twitter"></a> `amp-twitter`
+# <a name="amp-twitter"></a> `amp-twitter`
 
-Displays a Twitter Tweet.
+<table>
+  <tr>
+    <td width="40%"><strong>Description</strong></td>
+    <td>Displays a Twitter Tweet.</td>
+  </tr>
+  <tr>
+    <td width="40%"><strong>Availability</strong></td>
+    <td>Stable</td>
+  </tr>
+  <tr>
+    <td width="40%"><strong>Required Script</strong></td>
+    <td><code>&lt;script async custom-element="amp-twitter" src="https://cdn.ampproject.org/v0/amp-twitter-0.1.js">&lt;/script></code></td>
+  </tr>
+  <tr>
+    <td class="col-fourty"><strong><a href="https://www.ampproject.org/docs/guides/responsive/control_layout.html">Supported Layouts</a></strong></td>
+    <td>fill, fixed, fixed-height, flex-item, nodisplay, responsive</td>
+  </tr>
+  <tr>
+    <td width="40%"><strong>Examples</strong></td>
+    <td><a href="https://ampbyexample.com/components/amp-twitter/">Annotated code example for amp-twitter</a></td>
+  </tr>
+</table>
+
+## Behavior
+
+**CAVEAT**
+
+Twitter does not currently provide an API that yields fixed aspect ratio Tweet embeds. We currently automatically proportionally scale the Tweet to fit the provided size, but this may yield less than ideal appearance. Authors may need to manually tweak the provided width and height. You may also use the `media` attribute to select the aspect ratio based on screen width. We are looking for feedback how feasible this approach is in practice.
 
 Example:
+
 ```html
 <amp-twitter width=486 height=657
     layout="responsive"
     data-tweetid="585110598171631616"
     data-cards="hidden">
+    <blockquote placeholder class="twitter-tweet" data-lang="en"><p lang="en" dir="ltr">The story how I became what some people would call a frontend engineer and an exploration into what that even means<a href="https://t.co/HrVz4cGMWG">https://t.co/HrVz4cGMWG</a></p>&mdash; Malte Ubl (@cramforce) <a href="https://twitter.com/cramforce/status/585110598171631616">April 6, 2015</a></blockquote>
 </amp-twitter>
 ```
 
-**CAVEATS**
+Copy the placeholder from Twitter's embed dialog, but remove the `script`. Then add the `placeholder` attribute to the `blockquote` tag.
 
-Twitter does not currently provide an API that yields fixed aspect ratio Tweet embeds. We currently automatically proportionally scale the Tweet to fit the provided size, but this may yield less than ideal appearance. Authors may need to manually tweak the provided width and height. You may also use the `media` attribute to select the aspect ratio based on screen width. We are looking for feedback how feasible this approach is in practice.
+## Attributes
 
-#### Attributes
+**data-tweetid** (required)
 
-**data-tweetid**
+The ID of the tweet. In a URL like https://twitter.com/joemccann/status/640300967154597888,  `640300967154597888` is the tweetID.
 
-The ID of the tweet. In a URL like https://twitter.com/joemccann/status/640300967154597888 `640300967154597888` is the tweetID.
+**data-*** (optional)
 
-**data-nameofoption**
+You can specify options for the Tweet appearance by setting `data-` attributes. For example, `data-cards="hidden"` deactivates Twitter cards. For details on the available options, see [Twitter's docs](https://dev.twitter.com/web/javascript/creating-widgets#create-tweet).
 
-Options for the Tweet appearance can be set using `data-` attributes. E.g. `data-cards="hidden"` deactivates Twitter cards. For documentation of the available options, see [Twitter's docs](https://dev.twitter.com/web/javascript/creating-widgets#create-tweet).
+**common attributes**
+
+This element includes [common attributes](https://www.ampproject.org/docs/reference/common_attributes) extended to AMP components.
+
+## Validation
+
+See [amp-twitter rules](https://github.com/ampproject/amphtml/blob/master/extensions/amp-twitter/0.1/validator-amp-twitter.protoascii) in the AMP validator specification.

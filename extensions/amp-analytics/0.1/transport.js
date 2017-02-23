@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 
-import {assertHttpsUrl} from '../../../src/url';
-import {log} from '../../../src/log';
+import {
+  assertHttpsUrl,
+  parseUrl,
+  checkCorsUrl,
+} from '../../../src/url';
+import {dev, user} from '../../../src/log';
 import {loadPromise} from '../../../src/event-helper';
+import {timerFor} from '../../../src/timer';
+import {removeElement} from '../../../src/dom';
+import {setStyle} from '../../../src/style';
 
 /** @const {string} */
-const TAG_ = 'AmpAnalytics.Transport';
+const TAG_ = 'amp-analytics.Transport';
 
 /**
  * @param {!Window} win
@@ -27,7 +34,8 @@ const TAG_ = 'AmpAnalytics.Transport';
  * @param {!Object<string, string>} transportOptions
  */
 export function sendRequest(win, request, transportOptions) {
-  assertHttpsUrl(request);
+  assertHttpsUrl(request, 'amp-analytics request');
+  checkCorsUrl(request);
   if (transportOptions['beacon'] &&
       Transport.sendRequestUsingBeacon(win, request)) {
     return;
@@ -40,7 +48,7 @@ export function sendRequest(win, request, transportOptions) {
     Transport.sendRequestUsingImage(win, request);
     return;
   }
-  log.warn(TAG_, 'Failed to send request', request, transportOptions);
+  user().warn(TAG_, 'Failed to send request', request, transportOptions);
 }
 
 /**
@@ -58,9 +66,10 @@ export class Transport {
     image.width = 1;
     image.height = 1;
     loadPromise(image).then(() => {
-      log.fine(TAG_, 'Sent image request', request);
+      dev().fine(TAG_, 'Sent image request', request);
     }).catch(() => {
-      log.warn(TAG_, 'Failed to send image request', request);
+      user().warn(TAG_, 'Response unparseable or failed to send image ' +
+          'request', request);
     });
   }
 
@@ -73,9 +82,11 @@ export class Transport {
     if (!win.navigator.sendBeacon) {
       return false;
     }
-    win.navigator.sendBeacon(request, '');
-    log.fine(TAG_, 'Sent beacon request', request);
-    return true;
+    const result = win.navigator.sendBeacon(request, '');
+    if (result) {
+      dev().fine(TAG_, 'Sent beacon request', request);
+    }
+    return result;
   }
 
   /**
@@ -87,6 +98,7 @@ export class Transport {
     if (!win.XMLHttpRequest) {
       return false;
     }
+    /** @const {XMLHttpRequest} */
     const xhr = new win.XMLHttpRequest();
     if (!('withCredentials' in xhr)) {
       return false; // Looks like XHR level 1 - CORS is not supported.
@@ -98,8 +110,8 @@ export class Transport {
     xhr.setRequestHeader('Content-Type', 'text/plain');
 
     xhr.onreadystatechange = () => {
-      if (xhr.readystate == 4) {
-        log.fine(TAG_, 'Sent XHR request', request);
+      if (xhr.readyState == 4) {
+        dev().fine(TAG_, 'Sent XHR request', request);
       }
     };
 
@@ -108,3 +120,32 @@ export class Transport {
   }
 }
 
+/**
+ * Sends a ping request using an iframe, that is removed 5 seconds after
+ * it is loaded.
+ * This is not available as a standard transport, but rather used for
+ * specific, whitelisted requests.
+ * @param {!Window} win
+ * @param {string} request The request URL.
+ */
+export function sendRequestUsingIframe(win, request) {
+  assertHttpsUrl(request, 'amp-analytics request');
+  /** @const {!Element} */
+  const iframe = win.document.createElement('iframe');
+  setStyle(iframe, 'display', 'none');
+  iframe.onload = iframe.onerror = () => {
+    timerFor(win).delay(() => {
+      removeElement(iframe);
+    }, 5000);
+  };
+  user().assert(
+      parseUrl(request).origin != parseUrl(win.location.href).origin,
+      'Origin of iframe request must not be equal to the doc' +
+      'ument origin. See https://github.com/ampproject/' +
+      'amphtml/blob/master/spec/amp-iframe-origin-policy.md for details.');
+  iframe.setAttribute('amp-analytics', '');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  iframe.src = request;
+  win.document.body.appendChild(iframe);
+  return iframe;
+}

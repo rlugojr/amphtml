@@ -15,8 +15,8 @@
  */
 
 import {Observable} from './observable';
-import {getService} from './service';
-import {log} from './log';
+import {fromClass} from './service';
+import {dev} from './log';
 import {listenOnce, listenOncePromise} from './event-helper';
 
 
@@ -44,21 +44,21 @@ export class Input {
     /** @private {!Function} */
     this.boundOnMouseDown_ = this.onMouseDown_.bind(this);
 
-    /** @private {!Function} */
-    this.boundOnMouseMove_ = this.onMouseMove_.bind(this);
+    /** @private {?function(!Event)} */
+    this.boundOnMouseMove_ = null;
 
-    /** @private {!Function} */
-    this.boundMouseCanceled_ = this.mouseCanceled_.bind(this);
+    /** @private {?Function} */
+    this.boundMouseCanceled_ = null;
 
-    /** @private {!Function} */
-    this.boundMouseConfirmed_ = this.mouseConfirmed_.bind(this);
+    /** @private {?Function} */
+    this.boundMouseConfirmed_ = null;
 
     /** @private {boolean} */
     this.hasTouch_ = ('ontouchstart' in win ||
         (win.navigator['maxTouchPoints'] !== undefined &&
             win.navigator['maxTouchPoints'] > 0) ||
         win['DocumentTouch'] !== undefined);
-    log.fine(TAG_, 'touch detected:', this.hasTouch_);
+    dev().fine(TAG_, 'touch detected:', this.hasTouch_);
 
     /** @private {boolean} */
     this.keyboardActive_ = false;
@@ -84,6 +84,8 @@ export class Input {
     // mouse events.
     if (this.hasTouch_) {
       this.hasMouse_ = !this.hasTouch_;
+      this.boundOnMouseMove_ =
+          /** @private {function(!Event)} */ (this.onMouseMove_.bind(this));
       listenOnce(win.document, 'mousemove', this.boundOnMouseMove_);
     }
   }
@@ -182,7 +184,7 @@ export class Input {
 
     this.keyboardActive_ = true;
     this.keyboardStateObservable_.fire(true);
-    log.fine(TAG_, 'keyboard activated');
+    dev().fine(TAG_, 'keyboard activated');
   }
 
   /** @private */
@@ -192,11 +194,24 @@ export class Input {
     }
     this.keyboardActive_ = false;
     this.keyboardStateObservable_.fire(false);
-    log.fine(TAG_, 'keyboard deactivated');
+    dev().fine(TAG_, 'keyboard deactivated');
   }
 
-  /** @private */
-  onMouseMove_() {
+  /**
+   * @param {!Event} e
+   * @return {!Promise|undefined}
+   * @private
+   */
+  onMouseMove_(e) {
+    // The event explicitly states that it's a result of a touch event.
+    if (e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) {
+      this.mouseCanceled_();
+      return undefined;
+    }
+    if (!this.boundMouseConfirmed_) {
+      this.boundMouseConfirmed_ = this.mouseConfirmed_.bind(this);
+      this.boundMouseCanceled_ = this.mouseCanceled_.bind(this);
+    }
     // If "click" arrives within a timeout time, this is most likely a
     // touch/mouse emulation. Otherwise, if timeout exceeded, this looks
     // like a legitimate mouse event.
@@ -208,7 +223,7 @@ export class Input {
   mouseConfirmed_() {
     this.hasMouse_ = true;
     this.mouseDetectedObservable_.fire(true);
-    log.fine(TAG_, 'mouse detected');
+    dev().fine(TAG_, 'mouse detected');
   }
 
   /** @private */
@@ -216,9 +231,10 @@ export class Input {
     // Repeat, if attempts allow.
     this.mouseConfirmAttemptCount_++;
     if (this.mouseConfirmAttemptCount_ <= MAX_MOUSE_CONFIRM_ATTEMPS_) {
-      listenOnce(this.win.document, 'mousemove', this.boundOnMouseMove_);
+      listenOnce(this.win.document, 'mousemove',
+          /** @type {function(!Event)} */ (this.boundOnMouseMove_));
     } else {
-      log.fine(TAG_, 'mouse detection failed');
+      dev().fine(TAG_, 'mouse detection failed');
     }
   }
 }
@@ -229,7 +245,5 @@ export class Input {
  * @return {!Input}
  */
 export function inputFor(window) {
-  return getService(window, 'input', () => {
-    return new Input(window);
-  });
+  return fromClass(window, 'input', Input);
 };

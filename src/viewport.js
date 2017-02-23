@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import {getService} from './service';
+import {getExistingServiceForDoc} from './service';
 
 /**
- * @param {!Window} window
- * @return {!Viewport}
+ * @param {!Node|!./service/ampdoc-impl.AmpDoc} nodeOrDoc
+ * @return {!./service/viewport-impl.Viewport}
  */
-export function viewportFor(window) {
-  return getService(window, 'viewport');
-};
+export function viewportForDoc(nodeOrDoc) {
+  return /** @type {!./service/viewport-impl.Viewport} */ (
+      getExistingServiceForDoc(nodeOrDoc, 'viewport'));
+}

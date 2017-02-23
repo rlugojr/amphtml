@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
-import {createIframePromise} from '../../../../testing/iframe';
-require('../amp-vine');
+import {
+  createIframePromise,
+  doNotLoadExternalResourcesInTest,
+} from '../../../../testing/iframe';
+import '../amp-vine';
 import {adopt} from '../../../../src/runtime';
 
 adopt(window);
@@ -23,6 +26,7 @@ adopt(window);
 describe('amp-vine', () => {
   function getVine(vineId, opt_responsive) {
     return createIframePromise().then(iframe => {
+      doNotLoadExternalResourcesInTest(iframe.win);
       const vine = iframe.doc.createElement('amp-vine');
       vine.setAttribute('data-vineid', vineId);
       vine.setAttribute('width', 400);
@@ -30,9 +34,7 @@ describe('amp-vine', () => {
       if (opt_responsive) {
         vine.setAttribute('layout', 'responsive');
       }
-      iframe.doc.body.appendChild(vine);
-      vine.implementation_.layoutCallback();
-      return vine;
+      return iframe.addElement(vine);
     });
   }
 
@@ -42,8 +44,6 @@ describe('amp-vine', () => {
       expect(iframe).to.not.be.null;
       expect(iframe.tagName).to.equal('IFRAME');
       expect(iframe.src).to.equal('https://vine.co/v/MdKjXez002d/embed/simple');
-      expect(iframe.getAttribute('width')).to.equal('400');
-      expect(iframe.getAttribute('height')).to.equal('400');
     });
   });
 
@@ -51,7 +51,7 @@ describe('amp-vine', () => {
     return getVine('MdKjXez002d', true).then(vine => {
       const iframe = vine.querySelector('iframe');
       expect(iframe).to.not.be.null;
-      expect(iframe.className).to.match(/-amp-fill-content/);
+      expect(iframe.className).to.match(/i-amphtml-fill-content/);
     });
   });
 

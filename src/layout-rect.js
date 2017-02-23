@@ -28,7 +28,35 @@
  *   height: number
  * }}
  */
-let LayoutRectDef;
+export let LayoutRectDef;
+
+
+/**
+ * The structure that represents the margins of an Element.
+ *
+ * @typedef {{
+ *   top: number,
+ *   right: number,
+ *   bottom: number,
+ *   left: number
+ * }}
+ */
+export let LayoutMarginsDef;
+
+
+/**
+ * The structure that represents a requested change to the margins of an
+ * Element. Any new values specified will replace existing ones (rather than
+ * being additive).
+ *
+ * @typedef {{
+ *   top: (number|undefined),
+ *   right: (number|undefined),
+ *   bottom: (number|undefined),
+ *   left: (number|undefined)
+ * }}
+ */
+export let LayoutMarginsChangeDef;
 
 
 /**
@@ -42,12 +70,12 @@ let LayoutRectDef;
  */
 export function layoutRectLtwh(left, top, width, height) {
   return {
-    left: left,
-    top: top,
-    width: width,
-    height: height,
+    left,
+    top,
+    width,
+    height,
     bottom: top + height,
-    right: left + width
+    right: left + width,
   };
 }
 
@@ -55,20 +83,13 @@ export function layoutRectLtwh(left, top, width, height) {
 /**
  * Creates a layout rect based on the DOMRect, e.g. obtained from calling
  * getBoundingClientRect.
- * @param {!DOMRect} rect
+ * @param {!ClientRect} rect
  * @return {!LayoutRectDef}
  */
 export function layoutRectFromDomRect(rect) {
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
-    bottom: rect.top + rect.height,
-    right: rect.left + rect.width
-  };
+  return layoutRectLtwh(Number(rect.left), Number(rect.top),
+      Number(rect.width), Number(rect.height));
 }
-
 
 /**
  * Returns true if the specified two rects overlap by a single pixel.
@@ -84,23 +105,31 @@ export function layoutRectsOverlap(r1, r2) {
 
 /**
  * Returns the intersection between a, b or null if there is none.
- * @param {!LayoutRectDef} a
- * @param {!LayoutRectDef} b
+ * @param {...?LayoutRectDef|undefined} var_args
  * @return {?LayoutRectDef}
  */
-export function rectIntersection(a, b) {
-  const x0 = Math.max(a.left, b.left);
-  const x1 = Math.min(a.left + a.width, b.left + b.width);
-
-  if (x0 <= x1) {
-    const y0 = Math.max(a.top, b.top);
-    const y1 = Math.min(a.top + a.height, b.top + b.height);
-
-    if (y0 <= y1) {
-      return layoutRectLtwh(x0, y0, x1 - x0, y1 - y0);
+export function rectIntersection(var_args) {
+  let x0 = -Infinity;
+  let x1 = Infinity;
+  let y0 = -Infinity;
+  let y1 = Infinity;
+  for (let i = 0; i < arguments.length; i++) {
+    const current = arguments[i];
+    if (!current) {
+      continue;
+    }
+    x0 = Math.max(x0, current.left);
+    x1 = Math.min(x1, current.left + current.width);
+    y0 = Math.max(y0, current.top);
+    y1 = Math.min(y1, current.top + current.height);
+    if (x1 < x0 || y1 < y0) {
+      return null;
     }
   }
-  return null;
+  if (x1 == Infinity) {
+    return null;
+  }
+  return layoutRectLtwh(x0, y0, x1 - x0, y1 - y0);
 }
 
 
@@ -118,7 +147,7 @@ export function expandLayoutRect(rect, dw, dh) {
     left: rect.left - rect.width * dw,
     right: rect.right + rect.width * dw,
     width: rect.width * (1 + dw * 2),
-    height: rect.height * (1 + dh * 2)
+    height: rect.height * (1 + dh * 2),
   };
 }
 
@@ -131,9 +160,23 @@ export function expandLayoutRect(rect, dw, dh) {
  * @return {!LayoutRectDef}
  */
 export function moveLayoutRect(rect, dx, dy) {
-  if (dx == 0 && dy == 0) {
+  if ((dx == 0 && dy == 0) ||
+      (rect.width == 0 && rect.height == 0)) {
     return rect;
   }
   return layoutRectLtwh(rect.left + dx, rect.top + dy,
       rect.width, rect.height);
+}
+
+
+/**
+ * @param {!LayoutMarginsDef} margins
+ * @param {!LayoutMarginsChangeDef} change
+ * @return {boolean}
+ */
+export function areMarginsChanged(margins, change) {
+  return (change.top !== undefined && change.top != margins.top) ||
+      (change.right !== undefined && change.right != margins.right) ||
+      (change.bottom !== undefined && change.bottom != margins.bottom) ||
+      (change.left !== undefined && change.left != margins.left);
 }

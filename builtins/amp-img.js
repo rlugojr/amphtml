@@ -15,11 +15,168 @@
  */
 
 import {BaseElement} from '../src/base-element';
-import {getLengthNumeral, isLayoutSizeDefined} from '../src/layout';
-import {loadPromise} from '../src/event-helper';
-import {parseSrcset} from '../src/srcset';
+import {isLayoutSizeDefined} from '../src/layout';
 import {registerElement} from '../src/custom-element';
+import {srcsetFromElement} from '../src/srcset';
+import {user} from '../src/log';
 
+/**
+ * Attributes to propagate to internal image when changed externally.
+ * @type {!Array<string>}
+ */
+const ATTRIBUTES_TO_PROPAGATE = ['alt', 'title', 'referrerpolicy', 'aria-label',
+      'aria-describedby', 'aria-labelledby'];
+
+export class AmpImg extends BaseElement {
+
+  /** @param {!AmpElement} element */
+  constructor(element) {
+    super(element);
+
+    /** @private {boolean} */
+    this.allowImgLoadFallback_ = true;
+
+    /** @private {boolean} */
+    this.isPrerenderAllowed_ = true;
+
+    /** @private {?Element} */
+    this.img_ = null;
+
+    /** @private {?../src/srcset.Srcset} */
+    this.srcset_ = null;
+  }
+
+  /** @override */
+  mutatedAttributesCallback(mutations) {
+    if (mutations['src'] !== undefined || mutations['srcset'] !== undefined) {
+      this.srcset_ = srcsetFromElement(this.element);
+      // This element may not have been laid out yet.
+      if (this.img_) {
+        this.updateImageSrc_();
+      }
+    }
+
+    if (this.img_) {
+      const attrs = ATTRIBUTES_TO_PROPAGATE.filter(
+          value => mutations[value] !== undefined);
+      this.propagateAttributes(
+          attrs, this.img_, /* opt_removeMissingAttrs */ true);
+    }
+  }
+
+  /** @override */
+  buildCallback() {
+    this.isPrerenderAllowed_ = !this.element.hasAttribute('noprerender');
+
+    this.srcset_ = srcsetFromElement(this.element);
+  }
+
+  /** @override */
+  isLayoutSupported(layout) {
+    return isLayoutSizeDefined(layout);
+  }
+
+  /**
+   * Create the actual image element and set up instance variables.
+   * Called lazily in the first `#layoutCallback`.
+   */
+  initialize_() {
+    if (this.img_) {
+      return;
+    }
+    this.allowImgLoadFallback_ = true;
+    // If this amp-img IS the fallback then don't allow it to have its own
+    // fallback to stop from nested fallback abuse.
+    if (this.element.hasAttribute('fallback')) {
+      this.allowImgLoadFallback_ = false;
+    }
+
+    this.img_ = new Image();
+    if (this.element.id) {
+      this.img_.setAttribute('amp-img-id', this.element.id);
+    }
+
+    // Remove role=img otherwise this breaks screen-readers focus and
+    // only read "Graphic" when using only 'alt'.
+    if (this.element.getAttribute('role') == 'img') {
+      this.element.removeAttribute('role');
+      user().error('AMP-IMG', 'Setting role=img on amp-img elements breaks ' +
+        'screen readers please just set alt or ARIA attributes, they will ' +
+        'be correctly propagated for the underlying <img> element.');
+    }
+
+    this.propagateAttributes(ATTRIBUTES_TO_PROPAGATE, this.img_);
+    this.applyFillContent(this.img_, true);
+
+    this.element.appendChild(this.img_);
+  }
+
+  /** @override */
+  prerenderAllowed() {
+    return this.isPrerenderAllowed_;
+  }
+
+  /** @override */
+  isRelayoutNeeded() {
+    return true;
+  }
+
+  /** @override */
+  reconstructWhenReparented() {
+    return false;
+  }
+
+  /** @override */
+  layoutCallback() {
+    this.initialize_();
+    let promise = this.updateImageSrc_();
+
+    // We only allow to fallback on error on the initial layoutCallback
+    // or else this would be pretty expensive.
+    if (this.allowImgLoadFallback_) {
+      promise = promise.catch(e => {
+        this.onImgLoadingError_();
+        throw e;
+      });
+      this.allowImgLoadFallback_ = false;
+    }
+    return promise;
+  }
+
+  /**
+   * @return {!Promise}
+   * @private
+   */
+  updateImageSrc_() {
+    if (this.getLayoutWidth() <= 0) {
+      return Promise.resolve();
+    }
+    const src = this.srcset_.select(this.getLayoutWidth(), this.getDpr()).url;
+    if (src == this.img_.getAttribute('src')) {
+      return Promise.resolve();
+    }
+
+    this.img_.setAttribute('src', src);
+
+    return this.loadPromise(this.img_).then(() => {
+      // Clean up the fallback if the src has changed.
+      if (!this.allowImgLoadFallback_ &&
+          this.img_.classList.contains('-amp-ghost')) {
+        this.getVsync().mutate(() => {
+          this.img_.classList.remove('-amp-ghost');
+          this.toggleFallback(false);
+        });
+      }
+    });
+  }
+
+  onImgLoadingError_() {
+    this.getVsync().mutate(() => {
+      this.img_.classList.add('-amp-ghost');
+      this.toggleFallback(true);
+    });
+  }
+};
 
 /**
  * @param {!Window} win Destination window for the new element.
@@ -27,67 +184,5 @@ import {registerElement} from '../src/custom-element';
  * @return {undefined}
  */
 export function installImg(win) {
-
-  class AmpImg extends BaseElement {
-
-    /** @override */
-    isLayoutSupported(layout) {
-      return isLayoutSizeDefined(layout);
-    }
-
-    /** @override */
-    buildCallback() {
-      /** @private @const {!Element} */
-      this.img_ = new Image();
-
-      if (this.element.id) {
-        this.img_.setAttribute('amp-img-id', this.element.id);
-      }
-      this.propagateAttributes(['alt'], this.img_);
-      this.applyFillContent(this.img_, true);
-
-      this.img_.width = getLengthNumeral(this.element.getAttribute('width'));
-      this.img_.height = getLengthNumeral(this.element.getAttribute('height'));
-
-      this.element.appendChild(this.img_);
-
-      /** @private @const {!Srcset} */
-      this.srcset_ = parseSrcset(this.element.getAttribute('srcset') ||
-          this.element.getAttribute('src'));
-    }
-
-    /** @override */
-    prerenderAllowed() {
-      return true;
-    }
-
-    /** @override */
-    isRelayoutNeeded() {
-      return true;
-    }
-
-    /** @override */
-    layoutCallback() {
-      return this.updateImageSrc_();
-    }
-
-    /**
-     * @return {!Promise}
-     * @private
-     */
-    updateImageSrc_() {
-      if (this.getLayoutWidth() <= 0) {
-        return Promise.resolve();
-      }
-      const src = this.srcset_.select(this.getLayoutWidth(), this.getDpr()).url;
-      if (src == this.img_.getAttribute('src')) {
-        return Promise.resolve();
-      }
-      this.img_.setAttribute('src', src);
-
-      return loadPromise(this.img_);
-    }
-  };
-
   registerElement(win, 'amp-img', AmpImg);
 }

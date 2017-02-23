@@ -32,7 +32,10 @@ describe('TapRecognizer', () => {
     sandbox = sinon.sandbox.create();
 
     element = {
-      addEventListener: (unusedEventType, unusedHandler) => {}
+      addEventListener: (unusedEventType, unusedHandler) => {},
+      ownerDocument: {
+        defaultView: window,
+      },
     };
 
     gestures = new Gestures(element);
@@ -43,9 +46,7 @@ describe('TapRecognizer', () => {
 
   afterEach(() => {
     gesturesMock.verify();
-    gesturesMock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
 
@@ -123,7 +124,10 @@ describe('DoubletapRecognizer', () => {
     sandbox = sinon.sandbox.create();
 
     element = {
-      addEventListener: (unusedEventType, unusedHandler) => {}
+      addEventListener: (unusedEventType, unusedHandler) => {},
+      ownerDocument: {
+        defaultView: window,
+      },
     };
 
     gestures = new Gestures(element);
@@ -134,9 +138,7 @@ describe('DoubletapRecognizer', () => {
 
   afterEach(() => {
     gesturesMock.verify();
-    gesturesMock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
 
@@ -230,7 +232,10 @@ describe('SwipeXYRecognizer', () => {
     clock = sandbox.useFakeTimers();
 
     element = {
-      addEventListener: (unusedEventType, unusedHandler) => {}
+      addEventListener: (unusedEventType, unusedHandler) => {},
+      ownerDocument: {
+        defaultView: window,
+      },
     };
 
     gestures = new Gestures(element);
@@ -241,10 +246,7 @@ describe('SwipeXYRecognizer', () => {
 
   afterEach(() => {
     gesturesMock.verify();
-    gesturesMock = null;
-    clock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
   function diff(value, compare, error) {
@@ -417,7 +419,10 @@ describe('TapzoomRecognizer', () => {
     clock = sandbox.useFakeTimers();
 
     element = {
-      addEventListener: (unusedEventType, unusedHandler) => {}
+      addEventListener: (unusedEventType, unusedHandler) => {},
+      ownerDocument: {
+        defaultView: window,
+      },
     };
 
     gestures = new Gestures(element);
@@ -428,10 +433,7 @@ describe('TapzoomRecognizer', () => {
 
   afterEach(() => {
     gesturesMock.verify();
-    gesturesMock = null;
-    clock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
 
@@ -598,7 +600,10 @@ describe('PinchRecognizer', () => {
     clock = sandbox.useFakeTimers();
 
     element = {
-      addEventListener: (unusedEventType, unusedHandler) => {}
+      addEventListener: (unusedEventType, unusedHandler) => {},
+      ownerDocument: {
+        defaultView: window,
+      },
     };
 
     gestures = new Gestures(element);
@@ -609,10 +614,7 @@ describe('PinchRecognizer', () => {
 
   afterEach(() => {
     gesturesMock.verify();
-    gesturesMock = null;
-    clock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
   function diff(value, compare, error) {

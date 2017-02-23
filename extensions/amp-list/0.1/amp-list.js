@@ -14,15 +14,13 @@
  * limitations under the License.
  */
 
-import {urlReplacementsFor} from '../../../src/url-replacements';
 import {assertHttpsUrl} from '../../../src/url';
+import {getValueForExpr} from '../../../src/json';
 import {isLayoutSizeDefined} from '../../../src/layout';
 import {templatesFor} from '../../../src/template';
+import {urlReplacementsForDoc} from '../../../src/url-replacements';
+import {user} from '../../../src/log';
 import {xhrFor} from '../../../src/xhr';
-
-
-/** @const {!Function} */
-const assert = AMP.assert;
 
 
 /**
@@ -39,31 +37,42 @@ export class AmpList extends AMP.BaseElement {
   /** @override */
   buildCallback() {
     /** @const {!Element} */
-    this.container_ = this.getWin().document.createElement('div');
+    this.container_ = this.win.document.createElement('div');
     this.applyFillContent(this.container_, true);
     this.element.appendChild(this.container_);
-    if (!this.element.hasAttribute('role')) {
-      this.element.setAttribute('role', 'list');
+    if (!this.container_.hasAttribute('role')) {
+      this.container_.setAttribute('role', 'list');
     }
 
     /** @private @const {!UrlReplacements} */
-    this.urlReplacements_ = urlReplacementsFor(this.getWin());
+    this.urlReplacements_ = urlReplacementsForDoc(this.getAmpDoc());
+  }
+
+  /** @override */
+  reconstructWhenReparented() {
+    return false;
   }
 
   /** @override */
   layoutCallback() {
-    return this.urlReplacements_.expand(assertHttpsUrl(
+    return this.urlReplacements_.expandAsync(assertHttpsUrl(
         this.element.getAttribute('src'), this.element)).then(src => {
-          const opts = {
-            credentials: this.element.getAttribute('credentials')
-          };
-          return xhrFor(this.getWin()).fetchJson(src, opts);
+          const opts = {};
+          if (this.element.hasAttribute('credentials')) {
+            opts.credentials = this.element.getAttribute('credentials');
+          }
+          if (!opts.credentials) {
+            opts.requireAmpResponseSourceOrigin = false;
+          }
+          return xhrFor(this.win).fetchJson(src, opts);
         }).then(data => {
-          assert(typeof data == 'object' && Array.isArray(data['items']),
-              'Response must be {items: []} object %s %s',
-              this.element, data);
-          const items = data['items'];
-          return templatesFor(this.getWin()).findAndRenderTemplateArray(
+          user().assert(data != null, 'Response is undefined %s', this.element);
+          const itemsExpr = this.element.getAttribute('items') || 'items';
+          const items = getValueForExpr(data, itemsExpr);
+          user().assert(items && Array.isArray(items),
+              'Response must contain an array at "%s". %s %s',
+              itemsExpr, this.element, data);
+          return templatesFor(this.win).findAndRenderTemplateArray(
               this.element, items).then(this.rendered_.bind(this));
         });
   }
@@ -85,7 +94,7 @@ export class AmpList extends AMP.BaseElement {
       const scrollHeight = this.container_./*OK*/scrollHeight;
       const height = this.element./*OK*/offsetHeight;
       if (scrollHeight > height) {
-        this.attemptChangeHeight(scrollHeight);
+        this.attemptChangeHeight(scrollHeight).catch(() => {});
       }
     });
   }

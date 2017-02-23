@@ -19,6 +19,8 @@ var dirname = require('path').dirname;
 var exec = require('child_process').exec;
 var fs = require('fs-extra');
 var gulp = require('gulp');
+// imageDiff is currently a bad dependency as it has a fixed node 0.8 engine
+// requirement.
 var imageDiff = require('gulp-image-diff');
 var util = require('gulp-util');
 
@@ -64,7 +66,7 @@ function doScreenshot(host, path, output, device, verbose, cb) {
 /**
  * Make a golden image of the url.
  * Ex:
- * `gulp make-golden --path=examples.build/everything.amp.max.html \
+ * `gulp make-golden --path=examples/everything.amp.max.html \
  *     --host=http://localhost:8000`
  *  @param {function} cb callback function
  */
@@ -199,7 +201,7 @@ function diffScreenshot_(file, dir, host, verbose, cb) {
         .pipe(gulp.dest(diffFile + '.json'))
         .on('error', function(error) {
           util.log(util.colors.red('Screenshot diff failed: ', file, error));
-          cb({error: error});
+          cb({error});
         })
         .on('end', function(res) {
           var contents = fs.readFileSync(diffFile + '.json', 'utf8');

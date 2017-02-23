@@ -18,7 +18,7 @@
  * @fileoverview Factory for amp-user-notification
  */
 
-import {getElementService} from './custom-element';
+import {getElementService} from './element-service';
 
 
 /**
@@ -26,6 +26,7 @@ import {getElementService} from './custom-element';
  * @return {!Promise<!UserNotificationManager>}
  */
 export function userNotificationManagerFor(window) {
-  return getElementService(window, 'userNotificationManager',
-      'amp-user-notification');
+  return /** @type {!Promise<!UserNotificationManager>} */ (
+      getElementService(window, 'userNotificationManager',
+          'amp-user-notification'));
 }

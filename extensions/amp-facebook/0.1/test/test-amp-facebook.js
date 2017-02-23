@@ -14,20 +14,36 @@
  * limitations under the License.
  */
 
-import {createIframePromise} from '../../../../testing/iframe';
-require('../amp-facebook');
+import {
+  createIframePromise,
+  doNotLoadExternalResourcesInTest,
+} from '../../../../testing/iframe';
+import '../amp-facebook';
 import {adopt} from '../../../../src/runtime';
+import {facebook} from '../../../../3p/facebook';
+import {setDefaultBootstrapBaseUrlForTesting} from '../../../../src/3p-frame';
+import {resetServiceForTesting} from '../../../../src/service';
+import {toggleExperiment} from '../../../../src/experiments';
 
 adopt(window);
 
-describe('amp-facebook', () => {
+const scenarios = ['sentinel', 'amp3pSentinel'];
 
-  function getFBPost(href, opt_embedAs) {
-    return createIframePromise().then(iframe => {
+describe('amp-facebook', function() {
+  this.timeout(5000);
+
+  const fbPostHref = 'https://www.facebook.com/zuck/posts/10102593740125791';
+  const fbVideoHref = 'https://www.facebook.com/zuck/videos/10102509264909801/';
+
+  function getAmpFacebook(href, opt_embedAs, opt_noFakeResources) {
+    return createIframePromise(/*opt_runtimeOff*/ true).then(iframe => {
+      if (!opt_noFakeResources) {
+        doNotLoadExternalResourcesInTest(iframe.win);
+      }
       const link = document.createElement('link');
       link.setAttribute('rel', 'canonical');
       link.setAttribute('href', 'https://foo.bar/baz');
-      iframe.addElement(link);
+      iframe.doc.head.appendChild(link);
 
       const ampFB = iframe.doc.createElement('amp-facebook');
       ampFB.setAttribute('data-href', href);
@@ -40,30 +56,103 @@ describe('amp-facebook', () => {
     });
   }
 
-  it('renders fb-post', () => {
-    return getFBPost('https://www.facebook.com/zuck/posts/10102593740125791').then(ampFB => {
+  afterEach(() => {
+    toggleExperiment(window, 'sentinel-name-change', false);
+  });
+
+  it('renders iframe in amp-facebook', () => {
+    return getAmpFacebook(fbPostHref).then(ampFB => {
       const iframe = ampFB.firstChild;
       expect(iframe).to.not.be.null;
       expect(iframe.tagName).to.equal('IFRAME');
-      expect(iframe.getAttribute('width')).to.equal('111');
-      expect(iframe.getAttribute('height')).to.equal('222');
-
-      const fbPost = iframe.getElementsByClassName('fb-post')[0];
-      expect(fbPost).not.to.be.null;
+      expect(iframe.className).to.match(/i-amphtml-fill-content/);
     });
   });
 
-  it('renders fb-post', () => {
-    return getFBPost('https://www.facebook.com/zuck/videos/10102509264909801/', 'video').then(ampFB => {
+  it('renders iframe in amp-facebook with video', () => {
+    return getAmpFacebook(fbVideoHref, 'video').then(ampFB => {
       const iframe = ampFB.firstChild;
       expect(iframe).to.not.be.null;
       expect(iframe.tagName).to.equal('IFRAME');
-      expect(iframe.getAttribute('width')).to.equal('111');
-      expect(iframe.getAttribute('height')).to.equal('222');
-
-      const fbVideo = iframe.getElementsByClassName('fb-video')[0];
-      expect(fbVideo).not.to.be.null;
+      expect(iframe.className).to.match(/i-amphtml-fill-content/);
     });
   });
 
+  it('adds fb-post element correctly', () => {
+    return createIframePromise().then(iframe => {
+      const div = document.createElement('div');
+      div.setAttribute('id', 'c');
+      iframe.doc.body.appendChild(div);
+
+      facebook(iframe.win, {
+        href: fbPostHref,
+        width: 111,
+        height: 222,
+      });
+      const fbPost = iframe.doc.body.getElementsByClassName('fb-post')[0];
+      expect(fbPost).not.to.be.undefined;
+      expect(fbPost.getAttribute('data-href')).to.equal(fbPostHref);
+    });
+  });
+
+  it('adds fb-video element correctly', () => {
+    return createIframePromise().then(iframe => {
+      const div = document.createElement('div');
+      div.setAttribute('id', 'c');
+      iframe.doc.body.appendChild(div);
+
+      facebook(iframe.win, {
+        href: fbVideoHref,
+        width: 111,
+        height: 222,
+        embedAs: 'video',
+      });
+      const fbVideo = iframe.doc.body.getElementsByClassName('fb-video')[0];
+      expect(fbVideo).not.to.be.undefined;
+      expect(fbVideo.getAttribute('data-href')).to.equal(fbVideoHref);
+    });
+  });
+
+  scenarios.forEach(sentinelName => {
+    it('resizes facebook posts', () => {
+      if (sentinelName == 'sentinel') {
+        toggleExperiment(window, 'sentinel-name-change', true);
+      }
+      const iframeSrc = 'http://ads.localhost:' + location.port +
+          '/test/fixtures/served/iframe.html';
+      resetServiceForTesting(window, 'bootstrapBaseUrl');
+      setDefaultBootstrapBaseUrlForTesting(iframeSrc);
+      return getAmpFacebook(
+          fbPostHref, undefined, /* opt_noFakeResources */ true).then(ampFB => {
+            return new Promise((resolve, unusedReject) => {
+              const iframe = ampFB.firstChild;
+              const impl = ampFB.implementation_;
+              impl.changeHeight = newHeight => {
+                expect(newHeight).to.equal(666);
+                resolve(ampFB);
+              };
+              const message = {
+                type: 'requestHeight',
+                is3p: true,
+                height: 666,
+              };
+              message[sentinelName] = iframe.getAttribute(
+                  'data-amp-3p-sentinel');
+              iframe.contentWindow.postMessage(message, '*');
+            });
+          });
+    });
+  });
+
+  it('removes iframe after unlayoutCallback', () => {
+    return getAmpFacebook(fbPostHref).then(ampFB => {
+      const iframe = ampFB.querySelector('iframe');
+      expect(iframe).to.not.be.null;
+      const obj = ampFB.implementation_;
+      obj.unlayoutCallback();
+      expect(ampFB.querySelector('iframe')).to.be.null;
+      expect(obj.iframe_).to.be.null;
+      expect(obj.unlayoutOnPause()).to.be.true;
+    });
+  });
 });

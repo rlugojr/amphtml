@@ -85,10 +85,16 @@
       bottom: 0;
       overflow-x: hidden;
       visibility: hidden;
+      -webkit-transform: translateX(-100%);
+      -ms-transform: translateX(-100%);
+      transform: translateX(-100%);
     }
 
     viewer[data-show-container="1"] #container1 {
       visibility: visible;
+      -webkit-transform: none;
+      -ms-transform: none;
+      transform: none;
     }
 
     viewer[data-show-container="1"] #show-container1-anchor {
@@ -97,6 +103,9 @@
 
     viewer[data-show-container="2"] #container2 {
       visibility: visible;
+      -webkit-transform: none;
+      -ms-transform: none;
+      transform: none;
     }
 
     viewer[data-show-container="2"] #show-container2-anchor {
@@ -105,19 +114,39 @@
 
     viewer[data-show-container="3"] #container3 {
       visibility: visible;
+      -webkit-transform: none;
+      -ms-transform: none;
+      transform: none;
     }
 
     viewer[data-show-container="3"] #show-container3-anchor {
       text-decoration: underline;
     }
 
-    viewer.natural container {
-      overflow-y: hidden;
+    viewer[data-show-container="4"] #container4 {
+      visibility: visible;
+      -webkit-transform: none;
+      -ms-transform: none;
+      transform: none;
     }
 
-    viewer.virtual container {
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
+    viewer[data-show-container="4"] #show-container4-anchor {
+      text-decoration: underline;
+    }
+
+    viewer[data-show-container="5"] #container5 {
+      visibility: visible;
+      -webkit-transform: none;
+      -ms-transform: none;
+      transform: none;
+    }
+
+    viewer[data-show-container="5"] #show-container5-anchor {
+      text-decoration: underline;
+    }
+
+    viewer.natural container {
+      overflow-y: hidden;
     }
 
     container iframe {
@@ -135,18 +164,18 @@
   <script src="./viewer-integr-messaging.js"></script>
 
   <script>
-
-    var SENTINEL = '__AMP__';
-
     var allViewers = [];
+    var currentContainerId = null;
 
-    function Viewer(containerId, id, visible) {
+    function Viewer(containerId, id, url, visible) {
       this.id = id;
+      this.url = url;
       this.alreadyLoaded_ = false;
       this.stackIndex_ = 0;
-      this.viewportType_ = 'natural';  // "natural" or "virtual"
+      this.viewportType_ = 'natural';
       this.visibilityState_ = visible ? 'visible' : 'hidden';
       this.prerenderSize_ = 1;
+      this.csi_ = 1;
 
       this.isIos_ = /iPhone|iPad|iPod/i.test(window.navigator.userAgent);
 
@@ -154,19 +183,19 @@
       this.header = document.querySelector('header');
       this.container = document.getElementById(containerId);
       this.iframe = document.createElement('iframe');
+      this.iframe.setAttribute('id', 'AMP_DOC_' + this.id);
       // TODO(dvoytenko): Set to the final value when crbug/577330 is fixed:
       // this.iframe.setAttribute('sandbox',
       //     'allow-popups allow-scripts allow-forms allow-pointer-lock' +
       //     ' allow-popups-to-escape-sandbox allow-same-origin');
 
       this.visibilityToggle_ = document.getElementById('visibilityToggle');
-      this.visibilityToggle_.onclick = function() {
-        this.toggleVisibility(this.visibilityState_ != 'visible');
-      }.bind(this);
-      if (visible) {
-        this.updateVisibilityToggle_();
-      }
-
+      this.visibilityToggle_.addEventListener('click', function() {
+        var activeId = this.viewer.getAttribute('data-show-container');
+        if (activeId == this.id) {
+          this.toggleVisibility(this.visibilityState_ != 'visible', true);
+        }
+      }.bind(this));
       this.viewer.classList.add(this.viewportType_);
 
       if (this.viewportType_ == 'natural' && !this.isIos_) {
@@ -175,9 +204,6 @@
         this.iframe.setAttribute('scrolling', 'no');
       }
 
-      if (this.viewportType_ == 'virtual') {
-        this.container.addEventListener('scroll', this.onScroll_.bind(this));
-      }
       window.addEventListener('resize', this.onResize_.bind(this));
       window.addEventListener('popstate', this.onPopState_.bind(this));
     };
@@ -193,44 +219,82 @@
         height: this.container./*OK*/offsetHeight,
         paddingTop: this.header./*OK*/offsetHeight,
         visibilityState: this.visibilityState_,
-        prerenderSize: this.prerenderSize_
+        prerenderSize: this.prerenderSize_,
+        origin: parseUrl(window.location.href).origin,
+        csi: this.csi_,
+        cap: 'foo,a2a',
       };
       log('Params:' + JSON.stringify(params));
 
-      var url = './article-access.amp.max.html#' + paramsStr(params);
+      var inputUrl = this.url + '#' + paramsStr(params);
       if (window.location.hash && window.location.hash.length > 1) {
-        url += '&' + window.location.hash.substring(1);
+        inputUrl += '&' + window.location.hash.substring(1);
       }
+      var parsedUrl = parseUrl(inputUrl);
+      var url = parsedUrl.href;
+      this.frameOrigin_ = parsedUrl.origin;
       log('AMP URL = ', url);
       this.iframe.style.display = 'none';
       this.container.appendChild(this.iframe);
 
-      // Notice that name can only be set once the IFrame is in the DOM.
-      this.iframe.contentWindow.name = SENTINEL + paramsStr(params);
-
-      this.messaging_ = new ViewerMessaging(this.iframe.contentWindow,
-          this.processRequest_.bind(this));
+      this.awaitHandshake_();
 
       this.iframe.onload = this.loaded_.bind(this);
       setTimeout(function() {
         this.iframe.style.visibility = 'hidden';
-        if (this.viewportType_ == 'virtual') {
-          this.iframe.style.height = this.container./*OK*/offsetHeight + 'px';
-        }
         this.iframe.style.display = '';
         this.iframe.setAttribute('src', url);
       }.bind(this));
     };
 
 
-    Viewer.prototype.toggleVisibility = function(visible) {
+    Viewer.prototype.awaitHandshake_ = function() {
+      log('Viewer.prototype.awaitHandshake_');
+      var targetId = this.iframe.id;
+      var target = this.iframe.contentWindow;
+      var targetOrigin = this.frameOrigin_;
+      var listener = function(event) {
+        if (event.origin == targetOrigin &&
+                this.isChannelOpen_(event.data) &&
+                (!event.source || event.source == target)) {
+          log('event: ',event);
+          log('Viewer ' + this.id + ' messaging established with ',
+              targetOrigin);
+          window.removeEventListener('message', listener, false);
+
+          const message = {
+            app: APP,
+            requestid: event.data.requestid,
+            data: {},
+            type: MessageType.RESPONSE,
+          };
+          target./*OK*/postMessage(message, targetOrigin);
+
+          this.messaging_ = new ViewerMessaging(target, targetOrigin,
+              this.processRequest_.bind(this), targetId);
+          this.sendRequest_('visibilitychange', {
+            state: this.visibilityState_,
+            prerenderSize: this.prerenderSize
+          }, true);
+        }
+      }.bind(this);
+      window.addEventListener('message', listener, false);
+    };
+
+    Viewer.prototype.isChannelOpen_ = function(eventData) {
+      return eventData.app == APP &&
+        eventData.name == 'channelOpen';
+    };
+
+
+    Viewer.prototype.toggleVisibility = function(visible, updateToggle) {
       log('Viewer ' + this.id + ' visibility -> ', visible);
       this.visibilityState_ = visible ? 'visible' : 'hidden';
-      this.messaging_.sendRequest('visibilitychange', {
+      this.sendRequest_('visibilitychange', {
         state: this.visibilityState_,
         prerenderSize: this.prerenderSize
       }, true);
-      if (visible) {
+      if (updateToggle) {
         this.updateVisibilityToggle_();
       }
     };
@@ -250,6 +314,12 @@
 
       this.iframe.style.display = '';
       this.iframe.style.visibility = '';
+
+      this.iframe.contentWindow.onbeforeunload = (function() {
+        this.container.style.paddingTop = '120px';
+        this.container.textContent =
+            'Unload of the AMP iframe is not allowed!';
+      }).bind(this);
     };
 
 
@@ -260,18 +330,9 @@
     };
 
 
-    Viewer.prototype.documentHeight_ = function(documentHeight) {
-      log('AMP document height:', documentHeight);
-      if (this.viewportType_ == 'virtual') {
-        this.iframe.style.height = Math.max(documentHeight,
-            this.container./*OK*/offsetHeight) + 'px';
-      }
-      return Promise.resolve();
-    };
-
-
     Viewer.prototype.onScroll_ = function() {
-      this.messaging_.sendRequest('viewport', {
+      log('Viewer.prototype.onScroll_');
+      this.sendRequest_('viewport', {
         scrollTop: this.container./*OK*/scrollTop
       }, false);
     };
@@ -282,7 +343,7 @@
           this.container./*OK*/offsetHeight,
           this.header./*OK*/offsetHeight,
           this.container./*OK*/scrollTop);
-      this.messaging_.sendRequest('viewport', {
+      this.sendRequest_('viewport', {
         scrollTop: this.container./*OK*/scrollTop,
         width: this.container./*OK*/offsetWidth,
         height: this.container./*OK*/offsetHeight,
@@ -313,6 +374,7 @@
       }
       this.stackIndex_ = stackIndex;
       window.history.pushState({}, '');
+      return Promise.resolve();
     };
 
 
@@ -324,6 +386,7 @@
       }
       this.stackIndex_ = stackIndex;
       window.history.go(-1);
+      return Promise.resolve();
     };
 
 
@@ -331,7 +394,7 @@
       // Even more trivial. Always assumes that only one step was popped in
       // history.
       this.stackIndex_--;
-      this.messaging_.sendRequest('historyPopped', {
+      this.sendRequest_('historyPopped', {
         newStackIndex: this.stackIndex_
       }, false);
       log('history popped to ', this.stackIndex_);
@@ -353,13 +416,15 @@
       });
     };
 
+    Viewer.prototype.scrollAmpDoc = function(scrollTop) {
+      log('viewer scroll amp doc: ', scrollTop);
+      this.sendRequest_('scroll', {scrollTop}, true);
+    };
 
     Viewer.prototype.processRequest_ = function(type, data, awaitResponse) {
+      log('Viewer.prototype.processRequest_');
       if (type == 'documentLoaded') {
         return this.documentReady_();
-      }
-      if (type == 'documentResized') {
-        return this.documentHeight_(data.height);
       }
       if (type == 'requestFullOverlay') {
         return this.requestFullOverlay_();
@@ -376,7 +441,51 @@
       if (type == 'broadcast') {
         return this.broadcast_(data);
       }
+      if (type == 'setFlushParams') {
+        return;
+      }
+      if (type == 'prerenderComplete') {
+        return;
+      }
+      if (type == 'tick') {
+        log('[CSI] tick. label:', data.label);
+        return;
+      }
+      if (type == 'sendCsi') {
+        log('[CSI] sendCsi.');
+        return;
+      }
+      if (type == 'scroll') {
+        return;
+      }
+      if (type == 'a2a') {
+        log('a2a navigation', data);
+        return;
+      }
+      if (type == 'unloaded') {
+        log('unloaded');
+        return this.handleUnload_();
+      }
+      if (type == 'documentHeight') {
+        return;
+      }
       return Promise.reject('request not supported: ' + type);
+    };
+
+    Viewer.prototype.handleUnload_ = function(type, data, awaitResponse) {
+      log('Viewer.prototype.handleUnload_');
+      if (this.messaging_) {
+        this.messaging_ = null;
+      }
+      return goog.Promise.resolve();
+    };
+
+    Viewer.prototype.sendRequest_ = function(type, data, awaitResponse) {
+      log('Viewer.prototype.sendRequest_');
+      if (!this.messaging_) {
+        return;
+      }
+      return this.messaging_.sendRequest(type, data, awaitResponse);
     };
 
 
@@ -384,6 +493,23 @@
       var var_args = Array.prototype.slice.call(arguments, 0);
       var_args.unshift('[VIEWER]');
       console/*OK*/.log.apply(console, var_args);
+    }
+
+
+    function parseUrl(urlString) {
+      var a = document.createElement('a');
+      a.href = urlString;
+      return {
+        href: a.href,
+        protocol: a.protocol,
+        host: a.host,
+        hostname: a.hostname,
+        port: a.port == '0' ? '' : a.port,
+        pathname: a.pathname,
+        search: a.search,
+        hash: a.hash,
+        origin: a.protocol + '//' + a.host
+      };
     }
 
 
@@ -404,15 +530,40 @@
 
 
     function loadAmpDoc() {
-      new Viewer('container1', '1', true).start();
+      new Viewer(
+          'container1',
+          '1',
+          './everything.amp.max.html?amp_js_v=0.1',
+          true).start();
       addShowContainer('1');
 
-      new Viewer('container2', '2', false).start();
+      new Viewer(
+          'container2',
+          '2',
+          './article.amp.max.html?amp_js_v=0.1',
+          false).start();
       addShowContainer('2');
 
-      new Viewer('container3', '3', false).start();
+      new Viewer(
+          'container3',
+          '3',
+          './article-access.amp.max.html?amp_js_v=0.1',
+          false).start();
       addShowContainer('3');
 
+      new Viewer(
+          'container4',
+          '4',
+          './alp.amp.max.html',
+          false).start();
+      addShowContainer('4');
+
+      new Viewer(
+          'container5',
+          '5',
+          './article-fixed-header.amp.max.html?amp_js_v=0.1',
+          false).start();
+      addShowContainer('5');
 
       showContainer('1');
     }
@@ -429,8 +580,19 @@
       var viewerEl = document.querySelector('viewer');
       viewerEl.setAttribute('data-show-container', id);
       allViewers.forEach(function(viewer) {
-        viewer.toggleVisibility(viewer.id == id);
+        viewer.toggleVisibility(viewer.id == id, viewer.id == id);
       });
+      currentContainerId = id;
+    }
+
+    function getContainer(id) {
+      return allViewers[id - 1];
+    }
+
+    function viewerScrollCurrentAmpDoc(scrollTop) {
+      if (currentContainerId) {
+        getContainer(currentContainerId).scrollAmpDoc(scrollTop);
+      }
     }
 
     window.onload = loadAmpDoc;
@@ -443,6 +605,8 @@
       <a class="show-container-anchor" id="show-container1-anchor">One</a>
       <a class="show-container-anchor" id="show-container2-anchor">Two</a>
       <a class="show-container-anchor" id="show-container3-anchor">Three</a>
+      <a class="show-container-anchor" id="show-container4-anchor">ALP</a>
+      <a class="show-container-anchor" id="show-container5-anchor">Five</a>
       <a>|</a>
       <a id="visibilityToggle">Visible</a>
     </header>
@@ -457,6 +621,16 @@
       </div>
     </container>
     <container id="container3">
+      <div class="wait">
+        Please wait, the AMP doc will appear here...
+      </div>
+    </container>
+    <container id="container4">
+      <div class="wait">
+        Please wait, the AMP doc will appear here...
+      </div>
+    </container>
+    <container id="container5">
       <div class="wait">
         Please wait, the AMP doc will appear here...
       </div>

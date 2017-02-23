@@ -14,13 +14,27 @@
  * limitations under the License.
  */
 
-import {getService} from './service';
+import {getExistingServiceForDoc, getServicePromiseForDoc} from './service';
 
 
 /**
- * @param {!Window} window
- * @return {!Viewer}
+ * @param {!Node|!./service/ampdoc-impl.AmpDoc} nodeOrDoc
+ * @return {!./service/viewer-impl.Viewer}
  */
-export function viewerFor(window) {
-  return getService(window, 'viewer');
-};
+export function viewerForDoc(nodeOrDoc) {
+  return /** @type {!./service/viewer-impl.Viewer} */ (
+      getExistingServiceForDoc(nodeOrDoc, 'viewer'));
+}
+
+
+/**
+ * Returns promise for the viewer. This is an unusual case and necessary only
+ * for services that need reference to the viewer before it has been
+ * initialized. Most of the code, however, just should use `viewerForDoc`.
+ * @param {!Node|!./service/ampdoc-impl.AmpDoc} nodeOrDoc
+ * @return {!Promise<!./service/viewer-impl.Viewer>}
+ */
+export function viewerPromiseForDoc(nodeOrDoc) {
+  return /** @type {!Promise<!./service/viewer-impl.Viewer>} */ (
+      getServicePromiseForDoc(nodeOrDoc, 'viewer'));
+}

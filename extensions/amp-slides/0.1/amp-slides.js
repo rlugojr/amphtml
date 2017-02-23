@@ -32,51 +32,50 @@ class AmpSlides extends AMP.BaseElement {
   }
 
   /** @override */
-  isReadyToBuild() {
-    return this.getRealChildren().length > 0;
-  }
-
-  /** @override */
   buildCallback() {
     /** @private {!Array<!Element>} */
     this.slides_ = this.getRealChildren();
     this.slides_.forEach((slide, i) => {
       this.setAsOwner(slide);
       // Only the first element is initially visible.
-      slide.style.display = i > 0 ? 'none' : 'block';
+      st.setStyle(slide, 'display', i > 0 ? 'none' : 'block');
       this.applyFillContent(slide);
     });
 
     /** @private {number} */
     this.currentIndex_ = 0;
 
-    this.prevButton_ = document.createElement('button');
+    this.prevButton_ = this.element.ownerDocument.createElement('button');
     this.prevButton_.textContent = '\u276E';
-    this.prevButton_.style.opacity = 0.6;
-    this.prevButton_.style.position = 'absolute';
-    this.prevButton_.style.zIndex = 10;
-    this.prevButton_.style.left = '16px';
-    this.prevButton_.style.top = '50%';
-    this.prevButton_.style.padding = '8px';
-    this.prevButton_.style.fontSize = '24px';
-    this.prevButton_.style.marginTop = '-20px';
-    this.prevButton_.style.pointerEvents = 'all';
+    st.setStyles(this.prevButton_, {
+      opacity: 0.6,
+      position: 'absolute',
+      zIndex: 10,
+      left: '16px',
+      top: '50%',
+      padding: '8px',
+      fontSize: '24px',
+      marginTop: '-20px',
+      pointerEvents: 'all',
+    });
     this.prevButton_.onclick = () => {
       this.go(-1, true);
     };
     this.element.appendChild(this.prevButton_);
 
-    this.nextButton_ = document.createElement('button');
+    this.nextButton_ = this.element.ownerDocument.createElement('button');
     this.nextButton_.textContent = '\u276F';
-    this.nextButton_.style.opacity = 0.6;
-    this.nextButton_.style.position = 'absolute';
-    this.nextButton_.style.zIndex = 10;
-    this.nextButton_.style.right = '16px';
-    this.nextButton_.style.top = '50%';
-    this.nextButton_.style.padding = '8px';
-    this.nextButton_.style.fontSize = '24px';
-    this.nextButton_.style.marginTop = '-20px';
-    this.nextButton_.style.pointerEvents = 'all';
+    st.setStyles(this.nextButton_, {
+      opacity: 0.6,
+      position: 'absolute',
+      zIndex: 10,
+      right: '16px',
+      top: '50%',
+      padding: '8px',
+      fontSize: '24px',
+      marginTop: '-20px',
+      pointerEvents: 'all',
+    });
     this.nextButton_.onclick = () => {
       this.go(1, true);
     };
@@ -120,8 +119,9 @@ class AmpSlides extends AMP.BaseElement {
       if (!animate) {
         this.commitSwitch_(oldSlide, newSlide);
       } else {
-        oldSlide.style.zIndex = 0;
-        Animation.animate(this.createTransition_(oldSlide, newSlide, dir),
+        st.setStyle(oldSlide, 'zIndex', 0);
+        Animation.animate(this.element,
+            this.createTransition_(oldSlide, newSlide, dir),
             200, 'ease-out').thenAlways(() => {
               this.commitSwitch_(oldSlide, newSlide);
               this.preloadNext_(dir);
@@ -139,7 +139,7 @@ class AmpSlides extends AMP.BaseElement {
     st.setStyles(slide, {
       transform: st.translateX(dir * containerWidth),
       zIndex: 1,
-      display: 'block'
+      display: 'block',
     });
 
     this.scheduleLayout(slide);
@@ -156,12 +156,12 @@ class AmpSlides extends AMP.BaseElement {
     return tr.all([
       tr.setStyles(newSlide, {
         transform: tr.translateX(tr.numeric(dir * containerWidth, 0)),
-        opacity: tr.numeric(0.8, 1)
+        opacity: tr.numeric(0.8, 1),
       }),
       tr.setStyles(oldSlide, {
         transform: tr.scale(tr.numeric(1, 0.98)),
-        opacity: tr.numeric(1, 0.4)
-      })
+        opacity: tr.numeric(1, 0.4),
+      }),
     ]);
   }
 
@@ -171,16 +171,20 @@ class AmpSlides extends AMP.BaseElement {
    * @private
    */
   commitSwitch_(oldSlide, newSlide) {
-    oldSlide.style.display = 'none';
-    oldSlide.style.zIndex = 0;
-    oldSlide.style.transform = '';
-    oldSlide.style.transition = '';
-    oldSlide.style.opacity = 1;
-    newSlide.style.display = 'block';
-    newSlide.style.zIndex = 0;
-    newSlide.style.transform = '';
-    newSlide.style.transition = '';
-    newSlide.style.opacity = 1;
+    st.setStyles(oldSlide, {
+      display: 'none',
+      zIndex: 0,
+      transform: '',
+      transition: '',
+      opacity: 1,
+    });
+    st.setStyles(newSlide, {
+      display: 'block',
+      zIndex: 0,
+      transform: '',
+      transition: '',
+      opacity: 1,
+    });
     this.scheduleLayout(newSlide);
     this.updateInViewport(oldSlide, false);
     this.updateInViewport(newSlide, true);

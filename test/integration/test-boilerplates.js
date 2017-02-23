@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import {createFixtureIframe, expectBodyToBecomeVisible} from
-    '../../testing/iframe.js';
+import {
+  createFixtureIframe,
+  expectBodyToBecomeVisible,
+} from '../../testing/iframe.js';
 import {getStyle} from '../../src/style';
 
-describe('Old Opacity Boilerplate', () => {
+describe.configure().retryOnSaucelabs().run('Old Opacity Boilerplate', () => {
 
   let fixture;
   beforeEach(() => {
@@ -41,7 +43,7 @@ describe('New Visibility Boilerplate', () => {
   let fixture;
   beforeEach(() => {
     return createFixtureIframe(
-      'test/fixtures/boilerplate-new-visibility.html', 1000).then(f => {
+      'test/fixtures/boilerplate-new-visibility.html', 10000).then(f => {
         fixture = f;
       });
   });

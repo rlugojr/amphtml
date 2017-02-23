@@ -14,77 +14,156 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-## Development on AMP HTML
+# Development on AMP HTML
 
-### Slack and mailing list
+## How to get started
 
-We discuss implementation issues on [amphtml-discuss@googlegroups.com](https://groups.google.com/forum/#!forum/amphtml-discuss).
+Before you start developing in AMP, check out these resources:
+* [CONTRIBUTING.md](CONTRIBUTING.md) has details on various ways you can contribute to the AMP Project.
+  * If you're developing in AMP, you should read the [Contributing code](CONTRIBUTING.md#contributing-code) and [Contributing features](CONTRIBUTING.md#contributing-features) sections..
+  * The [Ongoing participation](CONTRIBUTING.md#ongoing-participation) section has details on various ways of getting in touch with others in the community including email and Slack.
+  * **If you are new to open source projects, Git/GitHub, etc.**, check out the [Tips for new open source contributors](CONTRIBUTING.md#tips-for-new-open-source-contributors) which includes information on getting help and finding your first bug to work on. 
+* The [Getting Started Quick Start Guide](contributing/getting-started-quick.md) has installation steps and basic instructions for [one-time setup](contributing/getting-started-quick.md#one-time-setup), how to [build AMP & run a local server](contributing/getting-started-quick.md#build-amp--run-a-local-server) and how to [test AMP](contributing/getting-started-quick.md#test-amp). 
 
-For more immediate feedback, [sign up for our Slack](https://docs.google.com/forms/d/1wAE8w3K5preZnBkRk-MD1QkX8FmlRDxd_vs4bFSeJlQ/viewform?fbzx=4406980310789882877).
 
-### Starter issues
+## Build & Test
 
-We're curating a [list of GitHub "starter issues"](https://github.com/ampproject/amphtml/issues?q=is%3Aopen+is%3Aissue+label%3Astarter) of small to medium complexity that are great to jump into development on AMP.
+For most developers the instructions in the [Getting Started Quick Start Guide](contributing/getting-started-quick.md) will be sufficient for building/running/testing during development.  This section provides a more detailed reference.
 
-If you have any questions, feel free to ask on the issue or join us on [Slack](https://docs.google.com/forms/d/1wAE8w3K5preZnBkRk-MD1QkX8FmlRDxd_vs4bFSeJlQ/viewform?fbzx=4406980310789882877)!
+The Quick Start Guide's  [One-time setup](contributing/getting-started-quick.md#one-time-setup) has instructions for installing Node.js, Yarn, and Gulp which you'll need before running these commands.
 
-### Installation
+| Command                                                                 | Description                                                           |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **`gulp`**<sup>[[1]](#footnote-1)</sup>                                 | Runs "watch" and "serve". Use this for standard local dev.            |
+| `gulp dist`<sup>[[1]](#footnote-1)</sup>                                | Builds production binaries.                                           |
+| `gulp dist --fortesting`<sup>[[1]](#footnote-1)</sup>                   | Indicates the production binaries are used for local testing. Without this ads, tweets and similar use cases are expected to break locally when using minified sources. |
+| `gulp lint`                                                             | Validates against Google Closure Linter.                              |
+| `gulp lint --watch`                                                     | Watches for changes in files, Validates against Google Closure Linter.|
+| `gulp lint --fix`                                                       | Fixes simple lint warnings/errors automatically.                      |
+| `gulp build`<sup>[[1]](#footnote-1)</sup>                               | Builds the AMP library.                                               |
+| `gulp build --fortesting`<sup>[[1]](#footnote-1)</sup>                  | Builds the AMP library and will read the AMP_TESTING_HOST environment variable to write out an override AMP_CONFIG. |
+| `gulp build --css-only`<sup>[[1]](#footnote-1)</sup>                    | Builds only the embedded css into js files for the AMP library.       |
+| `gulp clean`                                                            | Removes build output.                                                 |
+| `gulp css`                                                              | Recompile css to build directory.                                     |
+| `gulp extensions`                                                       | Build AMP Extensions.                                                 |
+| `gulp watch`<sup>[[1]](#footnote-1)</sup>                               | Watches for changes in files, re-build.                               |
+| `gulp test`<sup>[[1]](#footnote-1)</sup>                                | Runs tests in Chrome.                                                 |
+| `gulp test --verbose`<sup>[[1]](#footnote-1)</sup>                      | Runs tests in Chrome with logging enabled.                            |
+| `gulp test --nobuild`                                                   | Runs tests without re-build.                                          |
+| `gulp test --watch`<sup>[[1]](#footnote-1)</sup>                        | Watches for changes in files, runs corresponding test(s) in Chrome.   |
+| `gulp test --watch --verbose`<sup>[[1]](#footnote-1)</sup>              | Same as "watch" with logging enabled.                                 |
+| `gulp test --saucelabs`<sup>[[1]](#footnote-1)</sup>                    | Runs test on saucelabs (requires [setup](#saucelabs)).                |
+| `gulp test --safari`<sup>[[1]](#footnote-1)</sup>                       | Runs tests in Safari.                                                 |
+| `gulp test --firefox`<sup>[[1]](#footnote-1)</sup>                      | Runs tests in Firefox.                                                |
+| `gulp test --files=<test-files-path-glob>`<sup>[[1]](#footnote-1)</sup> | Runs specific test files.                                             |
+| `gulp serve`                                                            | Serves content in repo root dir over http://localhost:8000/. Examples live in http://localhost:8000/examples/ |
+| `npm run ava`<sup>[[1]](#footnote-1)</sup>                              | Run node tests for tasks and offline/node code using [ava](https://github.com/avajs/ava). |
 
-1. Install [NodeJS](https://nodejs.org).
-2. In the repo directory, run `npm i` command to install the required npm packages.
-3. run `sudo npm i -g gulp` command to install gulp in your local bin folder ('/usr/local/bin/' on Mac).
-4. `edit /etc/hosts` and map `ads.localhost` and `iframe.localhost` to `127.0.0.1`.
-<pre>
-  127.0.0.1               ads.localhost iframe.localhost
-</pre>
+<a id="footnote-1">[1]</a> On Windows, this command must be run as administrator.
 
-### Build & Test
+## Manual testing
 
-| Command                       | Description                                                           |
-| ----------------------------- | --------------------------------------------------------------------- |
-| `gulp`                        | Runs "watch" and "serve".                                             |
-| `gulp dist`                   | Builds production binaries.                                           |
-| `gulp lint`                   | Validates against Google Closure Linter.                              |
-| `gulp lint --watch`           | Watches for changes in files, Validates against Google Closure Linter.|
-| `gulp lint --fix`             | Fixes simple lint warnings/errors automatically.                      |
-| `gulp build`                  | Builds the AMP library.                                               |
-| `gulp clean`                  | Removes build output.                                                 |
-| `gulp css`                    | Recompile css to build directory.                                     |
-| `gulp extensions`             | Build AMP Extensions.                                                 |
-| `gulp watch`                  | Watches for changes in files, re-build.                               |
-| `gulp test`                   | Runs tests in Chrome.                                                 |
-| `gulp test --verbose`         | Runs tests in Chrome with logging enabled.                            |
-| `gulp test --watch`           | Watches for changes in files, runs corresponding test(s) in Chrome.   |
-| `gulp test --watch --verbose` | Same as "watch" with logging enabled.                                 |
-| `gulp test --saucelabs`       | Runs test on saucelabs (requires [setup](#saucelabs)).                |
-| `gulp test --safari`          | Runs tests in Safari.                                                 |
-| `gulp test --firefox`         | Runs tests in Firefox.                                                |
-| `gulp serve`                  | Serves content in repo root dir over http://localhost:8000/.          |
-|-------------------------------|-----------------------------------------------------------------------|
+For manual testing build AMP and start the Node.js server by running `gulp`.
 
-To fix issues with Safari test runner launching multiple instances of the test, run:
-<pre>
-  defaults write com.apple.Safari ApplePersistenceIgnoreState YES
-</pre>
+### Examples
 
-#### Saucelabs
+The content in the `examples` directory can be reached at: http://localhost:8000/examples/
 
-Running tests on Sauce Labs requires an account. You can get one by signing up for [Open Sauce](https://saucelabs.com/opensauce/). This will provide you with a user name and access code that you need to add to your `.bashrc` or equivalent like this:
+For each example there are 3 modes:
 
-```
-export SAUCE_USERNAME=sauce-labs-user-name
-export SAUCE_ACCESS_KEY=access-key
-```
+- `/examples/abc.html` points to prod. This file would not reflect your local changes.
+- `/examples/abc.max.html` points to your local unminified AMP. You want to use this during normal dev.
+- `/examples/abc.min.html` points to a local minified AMP. This is closer to the prod setup. Only available after running `gulp dist --fortesting`.
 
-Also for local testing, download [saucelabs connect](https://docs.saucelabs.com/reference/sauce-connect/) (If you are having trouble, downgrade to 4.3.10) and establish a tunnel by running the `sc` before running tests.
 
-Because of the user name and password requirement pull requests do not directly run on Travis. If your pull request contains JS or CSS changes and it does not change the build system, it will be automatically build by our bot [@ampsauce](https://github.com/ampsauce/amphtml). Builds can be seen on [@ampsauce's Travis](https://travis-ci.org/ampsauce/amphtml/builds) and after they finished their state will be logged to your PR.
+### Document proxy
 
-If a test flaked on a pull request you can ask for a retry by sending the comment `@ampsauce retry`. This will only be accepted if you are a member of the "ampproject" org. Ping us if you'd like to be added. You may also need to publicly reveal your membership.
+AMP ships with a local proxy for testing production AMP documents with the local JS version.
 
-### Manual testing
+For any public AMP document like: http://output.jsbin.com/pegizoq/quiet
+
+You can access is with the local JS at
+
+- normal sources: http://localhost:8000/max/output.jsbin.com/pegizoq/quiet
+- minified: http://localhost:8000/min/output.jsbin.com/pegizoq/quiet
+
+When accessing `min` urls make sure you run `gulp dist` with the `--fortesting`
+flag so that we do not strip out the localhost code paths. (We do some
+code elimination to trim down the file size for the file we deploy to production)
+
+If the origin resource is on HTTPS, the URLs are http://localhost:8000/max/s/output.jsbin.com/pegizoq/quiet and http://localhost:8000/min/s/output.jsbin.com/pegizoq/quiet
+
+
+### A4A envelope
+
+If you are working on AMP 4 Ads (A4A), you can use the local A4A envelope for testing local and production AMP documents with the local JS version.
+
+A4A can be run either of these two modes:
+
+1. Friendly iframe mode: http://localhost:8000/a4a/...
+2. 3p iframe mode: http://localhost:8000/a4a-3p/...
+
+The following forms are supported:
+
+- local document: http://localhost:8000/a4a[-3p]/examples/animations.amp.max.html
+- proxied document with normal sources: http://localhost:8000/a4a[-3p]/max/output.jsbin.com/pegizoq/quiet
+- proxied document with minified sources: http://localhost:8000/a4a[-3p]/min/output.jsbin.com/pegizoq/quiet
+
+When accessing `min` urls make sure you run `gulp dist` with the `--fortesting`
+flag so that we do not strip out the localhost code paths. (We do some
+code elimination to trim down the file size for the file we deploy to production)
+
+If the origin resource is on HTTPS, the URLs are http://localhost:8000/a4a[-3p]/max/s/output.jsbin.com/pegizoq/quiet and http://localhost:8000/a4a[-3p]/min/s/output.jsbin.com/pegizoq/quiet
+
+Notice that all documents are assumed to have a "fake" signature. Thus, this functionality is only available in the
+`localDev` mode.
+
+Additionally, the following query parameters can be provided:
+
+- `width` - the width of the `amp-ad` (default "300")
+- `height` - the height of the `amp-ad` (default "250")
+
+
+### Chrome extension
 
 For testing documents on arbitrary URLs with your current local version of the AMP runtime we created a [Chrome extension](testing/local-amp-chrome-extension/README.md).
+
+## Testing on Sauce Labs
+
+In general local testing (i.e. `gulp test`) and the automatic test run on [Travis](https://travis-ci.org/ampproject/amphtml/pull_requests) that happens when you send a pull request are sufficient.  If you want to run your tests across multiple environments/browsers before sending your PR you can use Sauce Labs.
+
+To run the tests on Sauce Labs:
+
+* Create a Sauce Labs account.  If you are only going to use your account for open source projects like this one you can sign up for a free [Open Sauce](https://saucelabs.com/opensauce/) account.  (If you create an account through the normal account creation mechanism you'll be signing up for a free trial that expires; you can contact Sauce Labs customer service to switch your account to Open Sauce if you did this accidentally.)
+* Set the `SAUCE_USERNAME` and `SAUCE_ACCESS_KEY` environment variables.  On Linux add this to your `.bashrc`:
+
+   ```
+   export SAUCE_USERNAME=<Sauce Labs username>
+   export SAUCE_ACCESS_KEY=<Sauce Labs access key>
+   ```
+
+  You can find your Sauce Labs access key on the [User Settings](https://saucelabs.com/beta/user-settings) page.
+* Install the [Sauce Connect Proxy](https://wiki.saucelabs.com/display/DOCS/Setting+Up+Sauce+Connect+Proxy).
+* Run the proxy and then run the tests:
+   ```
+   # start the proxy
+   sc
+
+   # after seeing the "Sauce Connect is up" msg, run the tests
+   gulp test --saucelabs
+   ``` 
+* It may take a few minutes for the tests to start.  You can see the status of your tests on the Sauce Labs [Automated Tests](https://saucelabs.com/beta/dashboard/tests) dashboard.  (You can also see the status of your proxy on the [Tunnels](https://saucelabs.com/beta/tunnels) dashboard. 
+
+## Deploying AMP on Cloud for testing on devices
+
+For deploying and testing local AMP builds on [HEROKU](https://www.heroku.com/) , please follow the steps outlined in this [document](https://docs.google.com/document/d/1LOr8SEBEpLkqnFjzTNIZGi2VA8AC8_aKmDVux6co63U/edit?usp=sharing).
+
+In the meantime you can also use our automatic build on Heroku [link](http://amphtml-nightly.herokuapp.com/), which is normally built with latest head on master branch (please allow delay). The first time load is normally slow due to Heroku's free account throttling policy.
+
+To correctly get ads and third party working when testing on hosted services
+you will need set the `AMP_TESTING_HOST` environment variable. (On heroku this
+is done through
+`heroku config:set AMP_TESTING_HOST=my-heroku-subdomain.herokuapp.com`)
 
 ## Repository Layout
 <pre>
@@ -95,15 +174,14 @@ For testing documents on arbitrary URLs with your current local version of the A
   builtins/       - tags built into the core AMP runtime
       *.md        - documentation for use of the builtin
       *.js        - source code for builtin tag
+  contributing/   - docs for people contributing to the AMP Project
   css/            - default css
   dist/           - (generated) main JS binaries are created here. This is what
                     gets deployed to cdn.ampproject.org.
   dist.3p/        - (generated) JS binaries and HTML files for 3p embeds and ads.
                     This is what gets deployed to 3p.ampproject.net.
-  docs/           - documentation
+  docs/           - documentation about AMP
   examples/       - example AMP HTML files and corresponding assets
-  examples.build/ - (generated) Same as examples with files pointing to the
-                    local AMP.
   extensions/     - plugins which extend the AMP HTML runtime's core set of tags
   spec/           - The AMP HTML Specification files
   src/            - source code for the AMP runtime
@@ -123,16 +201,8 @@ In particular, we try to maintain "it might not be perfect but isn't broken"-sup
 
 - [Life of an AMP *](https://docs.google.com/document/d/1WdNj3qNFDmtI--c2PqyRYrPrxSg2a-93z5iX0SzoQS0/edit#)
 - [AMP Layout system](spec/amp-html-layout.md)
+- [Building an AMP Extension](https://docs.google.com/document/d/19o7eDta6oqPGF4RQ17LvZ9CHVQN53whN-mCIeIMM8Qk/edit#)
 
 We also recommend scanning the [spec](spec/). The non-element part should help understand some of the design aspects.
-
-## AMP Dev Channel (Experimental)
-
-AMP Dev Channel is a way to opt a browser into using a newer version of the AMP JS libraries.
-
-This release may be less stable and it may contain features not available to all users. Opt into this option if you'd like to help test new versions of AMP, report bugs or build documents that require a new feature that is not yet available to everyone.
-
-To opt your browser into the AMP Dev Channel, go to [the AMP experiments page](https://cdn.ampproject.org/experiments.html) and activate the "AMP Dev Channel" experiment.
-
 
 ## [Code of conduct](CODE_OF_CONDUCT.md)

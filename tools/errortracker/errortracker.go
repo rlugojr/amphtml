@@ -20,6 +20,7 @@ package errortracker
 
 import (
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,9 +64,11 @@ type ErrorEvent struct {
 	Line      int32  `json:"line,omitempty"`
 	Classname string `json:"classname,omitempty"`
 	Function  string `json:"function,omitempty"`
+	Severity  string `json:"severity,omitempty"`
 }
 
 func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
 	http.HandleFunc("/r", handle)
 }
 
@@ -101,23 +104,87 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	// Fill query params into JSON struct.
 	line, _ := strconv.Atoi(r.URL.Query().Get("l"))
 	errorType := "default"
+	isUserError := false;
 	if r.URL.Query().Get("a") == "1" {
 		errorType = "assert"
+		isUserError = true
 	}
-	if strings.HasPrefix(r.Referer(), "https://cdn.ampproject.org/") {
+	// By default we log as "INFO" severity, because reports are very spammy
+	severity := "INFO"
+	level := logging.Info
+	// But if the request comes from the cache (and thus only from valid AMP
+	// docs) we log as "ERROR".
+	isCdn := false
+	if strings.HasPrefix(r.Referer(), "https://cdn.ampproject.org/") ||
+			strings.Contains(r.Referer(), ".cdn.ampproject.org/") ||
+			strings.Contains(r.Referer(), ".ampproject.net/") {
+		severity = "ERROR"
+		level = logging.Error
 		errorType += "-cdn"
+		isCdn = true
+	} else {
+		errorType += "-origin"
+	}
+	is3p := false
+	runtime := r.URL.Query().Get("rt")
+	if runtime != "" {
+		errorType += "-" + runtime;
+		if runtime == "inabox" {
+			severity = "ERROR"
+			level = logging.Error
+		}
+		if runtime == "3p" {
+			is3p = true
+		}
+	} else {
+		if r.URL.Query().Get("3p") == "1" {
+			is3p = true
+			errorType += "-3p"
+		} else {
+			errorType += "-1p"
+		}
+	}
+	isCanary := false;
+	if r.URL.Query().Get("ca") == "1" {
+		errorType += "-canary"
+		isCanary = true;
+	}
+	if r.URL.Query().Get("ex") == "1" {
+		errorType += "-expected"
+	}
+	sample := rand.Float64()
+	throttleRate := 0.01
+
+	if isCanary {
+		throttleRate = 1.0  // Explicitly log all canary errors.
+	} else if is3p {
+		throttleRate = 0.1
+	} else if isCdn {
+		throttleRate = 0.1
+	}
+
+	if isUserError {
+		throttleRate = throttleRate / 10;
+	}
+
+	if !(sample <= throttleRate) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "THROTTLED\n")
+		return
 	}
 
 	event := &ErrorEvent{
 		Message:     r.URL.Query().Get("m"),
 		Exception:   r.URL.Query().Get("s"),
-		Version:     r.URL.Query().Get("v"),
+		Version:     errorType + "-" + r.URL.Query().Get("v"),
 		Environment: "prod",
 		Application: errorType,
 		AppID:       appengine.AppID(c),
-		Filename:    r.URL.Query().Get("f"),
+		Filename:    r.URL.String(),
 		Line:        int32(line),
 		Classname:   r.URL.Query().Get("el"),
+		Severity:    severity,
 	}
 
 	if event.Message == "" && event.Exception == "" {
@@ -137,7 +204,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 		URL: r.Referer(),
 	}
 	event.Request.Meta = &ErrorRequestMeta{
-		HTTPReferrer:  r.Referer(),
+		HTTPReferrer:  r.URL.Query().Get("r"),
 		HTTPUserAgent: r.UserAgent(),
 		// Intentionally not logged.
 		// RemoteIP:   r.RemoteAddr,
@@ -146,6 +213,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	err = logc.LogSync(logging.Entry{
 		Time:    time.Now().UTC(),
 		Payload: event,
+		Level:   level,
 	})
 
 	if err != nil {
@@ -160,7 +228,8 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("debug") == "1" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "OK")
+		fmt.Fprintln(w, "OK\n");
+		fmt.Fprintln(w, event);
 	} else {
 		w.WriteHeader(http.StatusNoContent)
 	}

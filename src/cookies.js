@@ -27,7 +27,7 @@
  * @return {?string}
  */
 export function getCookie(win, name) {
-  const cookieString = win.document.cookie;
+  const cookieString = tryGetDocumentCookieNoInline(win);
   if (!cookieString) {
     return null;
   }
@@ -46,6 +46,22 @@ export function getCookie(win, name) {
 }
 
 /**
+ * This method should not be inlined to prevent TryCatch deoptimization.
+ * NoInline keyword at the end of function name also prevents Closure compiler
+ * from inlining the function.
+ * @private
+ */
+function tryGetDocumentCookieNoInline(win) {
+  try {
+    return win.document.cookie;
+  } catch (e) {
+    // Act as if no cookie is available. Exceptions can be thrown when
+    // AMP docs are opened on origins that do not allow setting
+    // cookies such as null origins.
+  }
+}
+
+/**
  * Sets the value of the cookie. The cookie access is restricted and must
  * go through the privacy review. Before using this method please file a
  * GitHub issue with "Privacy Review" label.
@@ -54,10 +70,14 @@ export function getCookie(win, name) {
  * @param {string} name
  * @param {string} value
  * @param {time} expirationTime
- * @param {{highestAvailableDomain:boolean}=} opt_options
+ * @param {{
+ *   highestAvailableDomain:(boolean|undefined),
+ *   domain:(string|undefined)
+ * }=} opt_options
  *     - highestAvailableDomain: If true, set the cookie at the widest domain
  *       scope allowed by the browser. E.g. on example.com if we are currently
  *       on www.example.com.
+ *     - domain: Explicit domain to set.
  */
 export function setCookie(win, name, value, expirationTime, opt_options) {
   if (opt_options && opt_options.highestAvailableDomain) {
@@ -71,7 +91,11 @@ export function setCookie(win, name, value, expirationTime, opt_options) {
       }
     }
   }
-  trySetCookie(win, name, value, expirationTime, undefined);
+  let domain = undefined;
+  if (opt_options && opt_options.domain) {
+    domain = opt_options.domain;
+  }
+  trySetCookie(win, name, value, expirationTime, domain);
 }
 
 /**
@@ -84,9 +108,23 @@ export function setCookie(win, name, value, expirationTime, opt_options) {
  * @param {string|undefined} domain
  */
 function trySetCookie(win, name, value, expirationTime, domain) {
-  win.document.cookie = encodeURIComponent(name) + '=' +
+  // We do not allow setting cookies on the domain that contains both
+  // the cdn. and www. hosts.
+  if (domain == 'ampproject.org') {
+    // Actively delete them.
+    value = 'delete';
+    expirationTime = 0;
+  }
+  const cookie = encodeURIComponent(name) + '=' +
       encodeURIComponent(value) +
       '; path=/' +
       (domain ? '; domain=' + domain : '') +
       '; expires=' + new Date(expirationTime).toUTCString();
+  try {
+    win.document.cookie = cookie;
+  } catch (ignore) {
+    // Do not throw if setting the cookie failed Exceptions can be thrown
+    // when AMP docs are opened on origins that do not allow setting
+    // cookies such as null origins.
+  };
 }

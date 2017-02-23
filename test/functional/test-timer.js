@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import {Timer} from '../../src/timer';
+import {Timer} from '../../src/service/timer-impl';
+import * as sinon from 'sinon';
 
 describe('Timer', () => {
 
@@ -27,25 +28,32 @@ describe('Timer', () => {
     const WindowApi = function() {};
     WindowApi.prototype.setTimeout = function(unusedCallback, unusedDelay) {};
     WindowApi.prototype.clearTimeout = function(unusedTimerId) {};
+    WindowApi.prototype.document = {};
     const windowApi = new WindowApi();
     windowMock = sandbox.mock(windowApi);
     timer = new Timer(windowApi);
   });
 
   afterEach(() => {
-    timer = null;
     windowMock.verify();
-    windowMock = null;
     sandbox.restore();
-    sandbox = null;
   });
 
   it('delay', () => {
     const handler = () => {};
-    windowMock.expects('setTimeout').withExactArgs(handler, 111)
-        .returns(1).once();
+    windowMock.expects('setTimeout').returns(1).once();
     windowMock.expects('clearTimeout').never();
     timer.delay(handler, 111);
+  });
+
+  it('delay 0 real window', done => {
+    timer = new Timer(self);
+    timer.delay(done, 0);
+  });
+
+  it('delay 1 real window', done => {
+    timer = new Timer(self);
+    timer.delay(done, 1);
   });
 
   it('delay default', done => {
@@ -99,7 +107,7 @@ describe('Timer', () => {
     }).catch(reason => {
       c++;
       expect(c).to.equal(1);
-      expect(reason).to.equal('timeout');
+      expect(reason.message).to.contain('timeout');
     });
   });
 
@@ -131,7 +139,7 @@ describe('Timer', () => {
     }).catch(reason => {
       c++;
       expect(c).to.equal(1);
-      expect(reason).to.equal('timeout');
+      expect(reason.message).to.contain('timeout');
     });
   });
 });

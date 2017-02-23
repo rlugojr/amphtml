@@ -18,6 +18,7 @@ var gulp = require('gulp-help')(require('gulp'));
 var path = require('path');
 var srcGlobs = require('../config').presubmitGlobs;
 var util = require('gulp-util');
+var through2 = require('through2');
 
 var dedicatedCopyrightNoteSources = /(\.js|\.css|\.go)$/;
 
@@ -36,37 +37,106 @@ var privateServiceFactory = 'This service should only be installed in ' +
 var shouldNeverBeUsed =
     'Usage of this API is not allowed - only for internal purposes.';
 
+var backwardCompat = 'This method must not be called. It is only retained ' +
+    'for backward compatibility during rollout.';
+
+var realiasGetMode = 'Do not re-alias getMode or its return so it can be ' +
+    'DCE\'d. Use explicitly like "getMode().localDev" instead.';
+
 // Terms that must not appear in our source files.
 var forbiddenTerms = {
   'DO NOT SUBMIT': '',
+  // TODO(dvoytenko, #6463): Enable this check once the current uses have
+  // been cleaned up.
+  // '(^-amp-|\\W-amp-)': 'Switch to new internal class form',
+  // '(^i-amp-|\\Wi-amp-)': 'Switch to new internal ID form',
   'describe\\.only': '',
+  'describes.*\\.only': '',
   'it\\.only': '',
-  'sinon\\.(spy|stub|mock)\\(\\w[^)]*\\)': {
-    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+  'Math\.random[^;()]*=': 'Use Sinon to stub!!!',
+  'sinon\\.(spy|stub|mock)\\(': {
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls',
   },
   '(\\w*([sS]py|[sS]tub|[mM]ock|clock).restore)': {
-    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls',
   },
-  'sinon\\.useFakeTimers': {
-    message: 'Use a sandbox instead to avoid repeated `#restore` calls'
+  'sinon\\.useFake\\w+': {
+    message: 'Use a sandbox instead to avoid repeated `#restore` calls',
+  },
+  'sandbox\\.(spy|stub|mock)\\([^,\\s]*[iI]?frame[^,\\s]*,': {
+    message: 'Do NOT stub on a cross domain iframe! #5359\n' +
+        '  If this is same domain, mark /*OK*/.\n' +
+        '  If this is cross domain, overwrite the method directly.',
   },
   'console\\.\\w+\\(': {
     message: 'If you run against this, use console/*OK*/.log to ' +
       'whitelist a legit case.',
-    // TODO: temporary, remove when validator is up to date
     whitelist: [
-      'validator/validator.js',
-      'validator/parse-css.js',
-      'validator/validator-in-browser.js',
-    ]
+      'build-system/pr-check.js',
+      'build-system/server.js',
+      'validator/nodejs/index.js',  // NodeJs only.
+      'validator/engine/parse-css.js',
+      'validator/engine/validator-in-browser.js',
+      'validator/engine/validator.js',
+    ],
+    checkInTestFolder: true,
+  },
+  // Match `getMode` that is not followed by a "()." and is assigned
+  // as a variable.
+  '\\bgetMode\\([^)]*\\)(?!\\.)': {
+    message: realiasGetMode,
+    whitelist: [
+      'src/mode.js',
+      'dist.3p/current/integration.js',
+    ],
+  },
+  'import[^}]*\\bgetMode as': {
+    message: realiasGetMode,
+  },
+  '\\bgetModeObject\\(': {
+    message: realiasGetMode,
+    whitelist: [
+      'src/mode-object.js',
+      'src/3p-frame.js',
+      'src/log.js',
+      'dist.3p/current/integration.js',
+    ],
+  },
+  '(?:var|let|const) +IS_DEV +=': {
+    message: 'IS_DEV local var only allowed in mode.js and ' +
+        'dist.3p/current/integration.js',
+    whitelist: [
+      'src/mode.js',
+      'dist.3p/current/integration.js',
+    ],
+  },
+  '\\.prefetch\\(': {
+    message: 'Do not use preconnect.prefetch, use preconnect.preload instead.',
+  },
+  'documentStateFor': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/custom-element.js',
+      'src/style-installer.js',
+      'src/service/document-state.js',
+      'src/service/viewer-impl.js',
+      'src/service/vsync-impl.js',
+    ],
+  },
+  'iframePing': {
+    message: 'This is only available in vendor config for ' +
+        'temporary workarounds.',
+    whitelist: [
+      'extensions/amp-analytics/0.1/amp-analytics.js',
+    ],
   },
   // Service factories that should only be installed once.
-  'installActionService': {
+  'installActionServiceForDoc': {
     message: privateServiceFactory,
     whitelist: [
       'src/service/action-impl.js',
       'src/service/standard-actions-impl.js',
-      'src/amp-core-service.js',
+      'src/runtime.js',
     ],
   },
   'installActionHandler': {
@@ -74,175 +144,361 @@ var forbiddenTerms = {
     whitelist: [
       'src/service/action-impl.js',
       'extensions/amp-access/0.1/amp-access.js',
+      'extensions/amp-form/0.1/amp-form.js',
     ],
   },
-  'installCidService': {
+  'installActivityService': {
     message: privateServiceFactory,
     whitelist: [
-      'src/service/cid-impl.js',
-      'extensions/amp-access/0.1/amp-access.js',
+      'extensions/amp-analytics/0.1/activity-impl.js',
       'extensions/amp-analytics/0.1/amp-analytics.js',
     ],
   },
-  'installStorageService': {
+  'installCidServiceForDocForTesting': {
     message: privateServiceFactory,
     whitelist: [
-      'extensions/amp-analytics/0.1/amp-analytics.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
+    ],
+  },
+  'installCryptoService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/service/crypto-impl.js',
+      'src/runtime.js',
+    ],
+  },
+  'installDocService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp.js',
+      'src/amp-shadow.js',
+      'src/inabox/amp-inabox.js',
+      'src/service/ampdoc-impl.js',
+      'testing/describes.js',
+      'testing/iframe.js',
+    ],
+  },
+  'installPerformanceService': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/amp.js',
+      'src/inabox/amp-inabox.js',
+      'src/service/performance-impl.js',
+    ],
+  },
+  'installStorageServiceForDoc': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/runtime.js',
       'src/service/storage-impl.js',
     ],
   },
-  'installViewerService': {
+  'installTemplatesService': {
     message: privateServiceFactory,
     whitelist: [
-      'src/amp-core-service.js',
-      'src/service/history-impl.js',
-      'src/service/resources-impl.js',
-      'src/service/viewer-impl.js',
-      'src/service/viewport-impl.js',
-      'src/service/vsync-impl.js',
+      'src/runtime.js',
+      'src/service/template-impl.js',
     ],
   },
-  'installViewportService': {
+  'installUrlReplacementsServiceForDoc': {
     message: privateServiceFactory,
     whitelist: [
-      'src/amp-core-service.js',
-      'src/service/resources-impl.js',
+      'src/runtime.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
+  'installViewerServiceForDoc': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/runtime.js',
+      'src/inabox/amp-inabox.js',
+      'src/service/viewer-impl.js',
+    ],
+  },
+  'setViewerVisibilityState': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/runtime.js',
+      'src/service/viewer-impl.js',
+    ],
+  },
+  'installViewportServiceForDoc': {
+    message: privateServiceFactory,
+    whitelist: [
+      'src/runtime.js',
       'src/service/viewport-impl.js',
     ],
   },
   'installVsyncService': {
     message: privateServiceFactory,
     whitelist: [
-      'src/amp-core-service.js',
+      'src/runtime.js',
       'src/service/resources-impl.js',
       'src/service/viewport-impl.js',
       'src/service/vsync-impl.js',
     ],
   },
-  'installResourcesService': {
+  'installResourcesServiceForDoc': {
     message: privateServiceFactory,
     whitelist: [
-      'src/amp-core-service.js',
+      'src/runtime.js',
       'src/service/resources-impl.js',
       'src/service/standard-actions-impl.js',
     ],
   },
-  'sendMessage': {
+  'installXhrService': {
     message: privateServiceFactory,
+    whitelist: [
+      'src/runtime.js',
+      'src/service/xhr-impl.js',
+    ],
+  },
+  'initLogConstructor|setReportError': {
+    message: 'Should only be called from JS binary entry files.',
+    whitelist: [
+      '3p/integration.js',
+      '3p/ampcontext-lib.js',
+      'ads/alp/install-alp.js',
+      'ads/inabox/inabox-host.js',
+      'dist.3p/current/integration.js',
+      'extensions/amp-access/0.1/amp-login-done.js',
+      'src/runtime.js',
+      'src/log.js',
+      'tools/experiments/experiments.js',
+    ],
+  },
+  '\\.sendMessage\\(': {
+    message: 'Usages must be reviewed.',
+    whitelist: [
+      // viewer-impl.sendMessage
+      'src/service/viewer-impl.js',
+      'src/service/viewport-impl.js',
+      'src/service/performance-impl.js',
+      'src/service/resources-impl.js',
+
+      // iframe-messaging-client.sendMessage
+      '3p/iframe-messaging-client.js',
+      '3p/ampcontext.js',
+    ],
+  },
+  '\\.sendMessageAwaitResponse\\(': {
+    message: 'Usages must be reviewed.',
     whitelist: [
       'src/service/viewer-impl.js',
       'src/service/storage-impl.js',
-      'examples/viewer-integr-messaging.js',
+      'src/service/history-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
+      'extensions/amp-access/0.1/login-dialog.js',
+      'extensions/amp-access/0.1/signin.js',
     ],
   },
   // Privacy sensitive
-  'cidFor': {
+  'cidForDoc|cidForDocOrNull': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'builtins/amp-ad.js',
+      'src/ad-cid.js',
       'src/cid.js',
       'src/service/cid-impl.js',
-      'src/url-replacements.js',
+      'src/service/url-replacements-impl.js',
       'extensions/amp-access/0.1/amp-access.js',
+      'extensions/amp-experiment/0.1/variant.js',
       'extensions/amp-user-notification/0.1/amp-user-notification.js',
     ],
   },
   'getBaseCid': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'src/service/cid-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
       'src/service/viewer-impl.js',
     ],
   },
   'cookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
+      'build-system/test-server.js',
       'src/cookies.js',
-      'src/service/cid-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
     ],
   },
   'getCookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'src/service/cid-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
       'src/cookies.js',
       'src/experiments.js',
       'tools/experiments/experiments.js',
-    ]
+    ],
   },
   'setCookie\\W': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'src/service/cid-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
       'src/cookies.js',
       'src/experiments.js',
       'tools/experiments/experiments.js',
-    ]
+    ],
   },
-  'isDevChannel\\W': {
+  'isTrustedViewer': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'extensions/amp-access/0.1/amp-access.js',
-      'extensions/amp-user-notification/0.1/amp-user-notification.js',
-      'src/experiments.js',
-      'src/service/storage-impl.js',
-      'tools/experiments/experiments.js',
-    ]
+      'src/service/viewer-impl.js',
+      'src/inabox/inabox-viewer.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
+    ],
   },
-  'isDevChannelVersionDoNotUse_\\W': {
+  'eval\\(': {
     message: shouldNeverBeUsed,
     whitelist: [
-      'src/experiments.js',
-    ]
+      'extension/amp-bind/0.1/test/test-bind-expr.js',
+    ],
   },
-  'eval\\(': '',
-  'storageFor': {
+  'storageForDoc': {
     message: requiresReviewPrivacy,
     whitelist: [
       'src/storage.js',
       'extensions/amp-user-notification/0.1/amp-user-notification.js',
+      'extensions/amp-app-banner/0.1/amp-app-banner.js',
     ],
   },
   'localStorage': {
     message: requiresReviewPrivacy,
     whitelist: [
-      'src/service/cid-impl.js',
+      'extensions/amp-analytics/0.1/cid-impl.js',
       'src/service/storage-impl.js',
+      'testing/fake-dom.js',
     ],
   },
-  'sessionStorage': requiresReviewPrivacy,
-  'indexedDB': requiresReviewPrivacy,
+  'sessionStorage': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-accordion/0.1/amp-accordion.js',
+    ],
+  },
+  'indexedDB': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      // https://docs.google.com/document/d/1tH_sj93Lo8XRpLP0cDSFNrBi1K_jmx_-q1sk_ZW3Nbg/edit#heading=h.ko4gxsan9svq
+      'src/service-worker/core.js',
+      'src/service-worker/kill.js',
+    ],
+  },
   'openDatabase': requiresReviewPrivacy,
   'requestFileSystem': requiresReviewPrivacy,
   'webkitRequestFileSystem': requiresReviewPrivacy,
-  'debugger': '',
-
-  // ES6. These are only the most commonly used.
-  'Array\\.of': es6polyfill,
-  // These currently depend on core-js/modules/web.dom.iterable which
-  // we don't want. That decision could be reconsidered.
-  'Promise\\.all': es6polyfill,
-  'Promise\\.race': es6polyfill,
-  '\\.startsWith': {
-    message: es6polyfill,
+  'getAccessReaderId': {
+    message: requiresReviewPrivacy,
     whitelist: [
-      'validator/tokenize-css.js',
-      'validator/validator.js'
-    ]
-  },
-  '\\.endsWith': es6polyfill,
-  // TODO: (erwinm) rewrite the destructure and spread warnings as
-  // eslint rules (takes more time than this quick regex fix).
-  // No destructuring allowed since we dont ship with Array polyfills.
-  '^\\s*(?:let|const|var) *(?:\\[[^\\]]+\\]|{[^}]+}) *=': es6polyfill,
-  // No spread (eg. test(...args) allowed since we dont ship with Array
-  // polyfills except `arguments` spread as babel does not polyfill
-  // it since it can assume that it can `slice` w/o the use of helpers.
-  '\\.\\.\\.(?!arguments\\))[_$A-Za-z0-9]*(?:\\)|])': {
-    message: es6polyfill,
-    whitelist: [
-      'extensions/amp-access/0.1/access-expr-impl.js',
+      'build-system/amp.extern.js',
+      'extensions/amp-access/0.1/amp-access.js',
+      'src/service/url-replacements-impl.js',
     ],
+  },
+  'getAuthdataField': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'build-system/amp.extern.js',
+      'extensions/amp-access/0.1/amp-access.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
+  'debugger': '',
+  // Overridden APIs.
+  '(doc.*)\\.referrer': {
+    message: 'Use Viewer.getReferrerUrl() instead.',
+    whitelist: [
+      '3p/integration.js',
+      'ads/google/a4a/utils.js',
+      'dist.3p/current/integration.js',
+      'src/service/viewer-impl.js',
+      'src/error.js',
+    ],
+  },
+  'getUnconfirmedReferrerUrl': {
+    message: 'Use Viewer.getReferrerUrl() instead.',
+    whitelist: [
+      'extensions/amp-dynamic-css-classes/0.1/amp-dynamic-css-classes.js',
+      'src/3p-frame.js',
+      'src/iframe-attributes.js',
+      'src/service/viewer-impl.js',
+      'src/inabox/inabox-viewer.js',
+    ],
+  },
+  'setTimeout.*throw': {
+    message: 'Use dev.error or user.error instead.',
+    whitelist: [
+      'src/log.js',
+    ],
+  },
+  '(dev|user)\\(\\)\\.(fine|info|warn|error)\\((?!\\s*([A-Z0-9-]+|[\'"`][A-Z0-9-]+[\'"`]))[^,)\n]*': {
+    message: 'Logging message require explicitly `TAG`, or an all uppercase' +
+        ' string as the first parameter',
+  },
+  '\\.schedulePass\\(': {
+    message: 'schedulePass is heavy, thinking twice before using it',
+    whitelist: [
+      'src/service/resources-impl.js',
+    ],
+  },
+  '\\.updatePriority\\(': {
+    message: 'updatePriority is a restricted API.',
+    whitelist: [
+      'extensions/amp-a4a/0.1/amp-a4a.js',
+      'src/base-element.js',
+      'src/service/resources-impl.js',
+    ],
+  },
+  '(win|Win)(dow)?(\\(\\))?\\.open\\W': {
+    message: 'Use dom.openWindowDialog',
+    whitelist: [
+      'src/dom.js',
+    ],
+  },
+  '\\.getWin\\(': {
+    message: backwardCompat,
+    whitelist: [
+    ],
+  },
+  '/\\*\\* @type \\{\\!Element\\} \\*/': {
+    message: 'Use assertElement instead of casting to !Element.',
+    whitelist: [
+      'src/log.js',  // Has actual implementation of assertElement.
+      'dist.3p/current/integration.js',  // Includes the previous.
+    ],
+  },
+  'startupChunk\\(': {
+    message: 'startupChunk( should only be used during startup',
+    whitelist: [
+      'src/amp.js',
+      'src/chunk.js',
+      'src/inabox/amp-inabox.js',
+      'src/runtime.js',
+    ],
+  },
+  'style\\.\\w+ = ': {
+    message: 'Use setStyle instead!',
+    whitelist: [
+      'testing/iframe.js',
+    ],
+  },
+  'AMP_CONFIG': {
+    message: 'Do not access AMP_CONFIG directly. Use isExperimentOn() ' +
+        'and getMode() to access config',
+    whitelist: [
+      'build-system/server.js',
+      'build-system/amp.extern.js',
+      'build-system/tasks/prepend-global/test.js',
+      'build-system/tasks/prepend-global/index.js',
+      'src/service-worker/core.js',
+      'src/service-worker/error-reporting.js',
+      'src/mode.js',
+      'src/experiments.js',
+      'src/config.js',
+      'dist.3p/current/integration.js',
+    ],
+  },
+  'data:image/svg(?!\\+xml;charset=utf-8,)[^,]*,': {
+    message: 'SVG data images must use charset=utf-8: ' +
+        '"data:image/svg+xml;charset=utf-8,..."',
   }
 };
 
@@ -255,7 +511,6 @@ var forbidden3pTerms = {
   // usage in babel's external helpers that is in a code path that we do
   // not use.
   '\\.then\\((?!callNext)': ThreePTermsMessage,
-  'Math\\.sign' : ThreePTermsMessage,
 };
 
 var bannedTermsHelpString = 'Please review viewport.js for a helper method ' +
@@ -275,7 +530,6 @@ var bannedTermsHelpString = 'Please review viewport.js for a helper method ' +
 var forbiddenTermsSrcInclusive = {
   '\\.innerHTML(?!_)': bannedTermsHelpString,
   '\\.outerHTML(?!_)': bannedTermsHelpString,
-  '\\.postMessage(?!_)': bannedTermsHelpString,
   '\\.offsetLeft(?!_)': bannedTermsHelpString,
   '\\.offsetTop(?!_)': bannedTermsHelpString,
   '\\.offsetWidth(?!_)': bannedTermsHelpString,
@@ -285,39 +539,130 @@ var forbiddenTermsSrcInclusive = {
   '\\.clientTop(?!_)': bannedTermsHelpString,
   '\\.clientWidth(?!_)': bannedTermsHelpString,
   '\\.clientHeight(?!_)': bannedTermsHelpString,
-  '\\.getClientRects(?!_)': bannedTermsHelpString,
-  '\\.getBoundingClientRect(?!_)': bannedTermsHelpString,
-  '\\.scrollBy(?!_)': bannedTermsHelpString,
-  '\\.scrollTo(?!_|p|p_)': bannedTermsHelpString,
-  '\\.scrollIntoView(?!_)': bannedTermsHelpString,
-  '\\.scrollIntoViewIfNeeded(?!_)': bannedTermsHelpString,
   '\\.scrollWidth(?!_)': 'please use `getScrollWidth()` from viewport',
   '\\.scrollHeight(?!_)': bannedTermsHelpString,
   '\\.scrollTop(?!_)': bannedTermsHelpString,
   '\\.scrollLeft(?!_)': bannedTermsHelpString,
-  '\\.focus(?!_)': bannedTermsHelpString,
   '\\.computedRole(?!_)': bannedTermsHelpString,
   '\\.computedName(?!_)': bannedTermsHelpString,
   '\\.innerText(?!_)': bannedTermsHelpString,
-  '\\.getComputedStyle(?!_)': bannedTermsHelpString,
   '\\.scrollX(?!_)': bannedTermsHelpString,
   '\\.scrollY(?!_)': bannedTermsHelpString,
   '\\.pageXOffset(?!_)': bannedTermsHelpString,
   '\\.pageYOffset(?!_)': bannedTermsHelpString,
   '\\.innerWidth(?!_)': bannedTermsHelpString,
   '\\.innerHeight(?!_)': bannedTermsHelpString,
-  '\\.getMatchedCSSRules(?!_)': bannedTermsHelpString,
   '\\.scrollingElement(?!_)': bannedTermsHelpString,
   '\\.computeCTM(?!_)': bannedTermsHelpString,
-  '\\.getBBox(?!_)': bannedTermsHelpString,
-  '\\.webkitConvertPointFromNodeToPage(?!_)': bannedTermsHelpString,
-  '\\.webkitConvertPointFromPageToNode(?!_)': bannedTermsHelpString,
-  '\\.changeHeight(?!_)': bannedTermsHelpString,
+  // Functions
+  '\\.changeHeight\\(': bannedTermsHelpString,
+  '\\.changeSize\\(': bannedTermsHelpString,
+  '\\.attemptChangeHeight\\(0\\)': 'please consider using `attemptCollapse()`',
+  '\\.collapse\\(': bannedTermsHelpString,
+  '\\.focus\\(': bannedTermsHelpString,
+  '\\.getBBox\\(': bannedTermsHelpString,
+  '\\.getBoundingClientRect\\(': bannedTermsHelpString,
+  '\\.getClientRects\\(': bannedTermsHelpString,
+  '\\.getComputedStyle\\(': bannedTermsHelpString,
+  '\\.getMatchedCSSRules\\(': bannedTermsHelpString,
+  '\\.postMessage\\(': bannedTermsHelpString,
+  '\\.scrollBy\\(': bannedTermsHelpString,
+  '\\.scrollIntoView\\(': bannedTermsHelpString,
+  '\\.scrollIntoViewIfNeeded\\(': bannedTermsHelpString,
+  '\\.scrollTo\\(': bannedTermsHelpString,
+  '\\.webkitConvertPointFromNodeToPage\\(': bannedTermsHelpString,
+  '\\.webkitConvertPointFromPageToNode\\(': bannedTermsHelpString,
+  '\\.scheduleUnlayout\\(': bannedTermsHelpString,
+  // Super complicated regex that says "find any querySelector method call that
+  // is passed as a variable anything that is not a string, or a string that
+  // contains a space.
+  '\\b(?:(?!\\w*[dD]oc\\w*)\\w)+\\.querySelector(?:All)?\\((?=\\s*([^\'"\\s]|[^\\s)]+\\s))[^)]*\\)': {
+    message: 'querySelector is not scoped to the element, but globally and ' +
+      'filtered to just the elements inside the element. This leads to ' +
+      'obscure bugs if you attempt to match a descendant of a descendant (ie ' +
+      '"div div"). Instead, use the scopedQuerySelector helper in dom.js',
+  },
+  'loadExtension': {
+    message: bannedTermsHelpString,
+    whitelist: [
+      'src/element-stub.js',
+      'src/friendly-iframe-embed.js',
+      'src/runtime.js',
+      'src/service/extensions-impl.js',
+      'src/service/lightbox-manager-discovery.js',
+      'src/service/crypto-impl.js',
+      'src/shadow-embed.js',
+      'extensions/amp-ad/0.1/amp-ad.js',
+      'extensions/amp-a4a/0.1/amp-a4a.js',
+      'ads/google/a4a/utils.js',
+    ],
+  },
+  'loadElementClass': {
+    message: bannedTermsHelpString,
+    whitelist: [
+      'src/runtime.js',
+      'src/service/extensions-impl.js',
+      'extensions/amp-ad/0.1/amp-ad.js',
+      'extensions/amp-a4a/0.1/amp-a4a.js',
+    ],
+  },
+  'reject\\(\\)': {
+    message: 'Always supply a reason in rejections. ' +
+        'error.cancellation() may be applicable.',
+    whitelist: [
+      'extensions/amp-access/0.1/access-expr-impl.js',
+      'extensions/amp-bind/0.1/bind-expr-impl.js',
+    ],
+  },
+  '[^.]loadPromise': {
+    message: 'Most users should use BaseElement…loadPromise.',
+    whitelist: [
+      'src/base-element.js',
+      'src/event-helper.js',
+      'src/friendly-iframe-embed.js',
+      'src/service/performance-impl.js',
+      'src/service/url-replacements-impl.js',
+      'extensions/amp-ad/0.1/amp-ad-xorigin-iframe-handler.js',
+      'extensions/amp-image-lightbox/0.1/amp-image-lightbox.js',
+      'extensions/amp-analytics/0.1/transport.js',
+    ],
+  },
+  '\\.getTime\\(\\)': {
+    message: 'Unless you do weird date math (whitelist), use Date.now().',
+  },
+  '\\.expandStringSync\\(': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-form/0.1/amp-form.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
+  '\\.expandStringAsync\\(': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-form/0.1/amp-form.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
+  '\\.expandInputValueSync\\(': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-form/0.1/amp-form.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
+  '\\.expandInputValueAsync\\(': {
+    message: requiresReviewPrivacy,
+    whitelist: [
+      'extensions/amp-form/0.1/amp-form.js',
+      'src/service/url-replacements-impl.js',
+    ],
+  },
 };
 
 // Terms that must appear in a source file.
 var requiredTerms = {
-  'Copyright 20(15|16) The AMP HTML Authors\\.':
+  'Copyright 20(15|16|17) The AMP HTML Authors\\.':
       dedicatedCopyrightNoteSources,
   'Licensed under the Apache License, Version 2\\.0':
       dedicatedCopyrightNoteSources,
@@ -337,6 +682,23 @@ function isInTestFolder(path) {
   return path.startsWith('test/') || folder == 'test';
 }
 
+function stripComments(contents) {
+  // Multi-line comments
+  contents = contents.replace(/\/\*(?!.*\*\/)(.|\n)*?\*\//g, function(match) {
+    // Preserve the newlines
+    var newlines = [];
+    for (var i = 0; i < match.length; i++) {
+      if (match[i] === '\n') {
+        newlines.push('\n');
+      }
+    }
+    return newlines.join('');
+  });
+  // Single line comments either on its own line or following a space,
+  // semi-colon, or closing brace
+  return contents.replace(/( |}|;|^) *\/\/.*/g, '$1');
+}
+
 /**
  * Logs any issues found in the contents of file based on terms (regex
  * patterns), and provides any possible fix information for matched terms if
@@ -349,16 +711,16 @@ function isInTestFolder(path) {
  *   false otherwise
  */
 function matchTerms(file, terms) {
-  var pathname = file.path;
-  var contents = file.contents.toString();
+  var contents = stripComments(file.contents.toString());
   var relative = file.relative;
   return Object.keys(terms).map(function(term) {
     var fix;
     var whitelist = terms[term].whitelist;
+    var checkInTestFolder = terms[term].checkInTestFolder;
     // NOTE: we could do a glob test instead of exact check in the future
     // if needed but that might be too permissive.
     if (Array.isArray(whitelist) && (whitelist.indexOf(relative) != -1 ||
-        isInTestFolder(relative))) {
+        isInTestFolder(relative) && !checkInTestFolder)) {
       return false;
     }
     // we can't optimize building the `RegExp` objects early unless we build
@@ -366,11 +728,26 @@ function matchTerms(file, terms) {
     // original term to get the possible fix value. This is ok as the
     // presubmit doesn't have to be blazing fast and this is most likely
     // negligible.
-    var matches = contents.match(new RegExp(term, 'gm'));
+    var regex = new RegExp(term, 'gm');
+    var index = 0;
+    var line = 1;
+    var column = 0;
+    var match;
+    var hasTerm = false;
 
-    if (matches) {
-      util.log(util.colors.red('Found forbidden: "' + matches[0] +
-          '" in ' + relative));
+    while ((match = regex.exec(contents))) {
+      hasTerm = true;
+      for (index; index < match.index; index++) {
+        if (contents[index] === '\n') {
+          line++;
+          column = 1;
+        } else {
+          column++;
+        }
+      }
+
+      util.log(util.colors.red('Found forbidden: "' + match[0] +
+          '" in ' + relative + ':' + line + ':' + column));
       if (typeof terms[term] == 'string') {
         fix = terms[term];
       } else {
@@ -382,9 +759,9 @@ function matchTerms(file, terms) {
         util.log(util.colors.blue(fix));
       }
       util.log(util.colors.blue('=========='));
-      return true;
     }
-    return false;
+
+    return hasTerm;
   }).some(function(hasAnyTerm) {
     return hasAnyTerm;
   });
@@ -413,10 +790,12 @@ function hasAnyTerms(file) {
     hasSrcInclusiveTerms = matchTerms(file, forbiddenTermsSrcInclusive);
   }
 
-  var is3pFile = /3p|ads/.test(pathname) ||
+  var is3pFile = /\/(3p|ads)\//.test(pathname) ||
       basename == '3p.js' ||
       basename == 'style.js';
-  if (is3pFile && !isTestFile) {
+  // Yet another reason to move ads/google/a4a somewhere else
+  var isA4A = /\/a4a\//.test(pathname);
+  if (is3pFile && !isTestFile && !isA4A) {
     has3pTerms = matchTerms(file, forbidden3pTerms);
   }
 
@@ -460,14 +839,10 @@ function checkForbiddenAndRequiredTerms() {
   var forbiddenFound = false;
   var missingRequirements = false;
   return gulp.src(srcGlobs)
-    .pipe(util.buffer(function(err, files) {
-      forbiddenFound = files.map(hasAnyTerms).some(function(errorFound) {
-        return errorFound;
-      });
-      missingRequirements = files.map(isMissingTerms).some(
-          function(errorFound) {
-        return errorFound;
-      });
+    .pipe(through2.obj(function(file, enc, cb) {
+      forbiddenFound = hasAnyTerms(file) || forbiddenFound;
+      missingRequirements = isMissingTerms(file) || missingRequirements;
+      cb();
     }))
     .on('end', function() {
       if (forbiddenFound) {

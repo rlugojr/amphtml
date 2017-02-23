@@ -14,38 +14,21 @@
  * limitations under the License.
  */
 
-import * as sinon from 'sinon';
 import {
   AmpUserNotification,
-  UserNotificationManager
-} from '../../../../build/all/v0/amp-user-notification-0.1.max';
+  UserNotificationManager,
+} from '../amp-user-notification';
 import {createIframePromise} from '../../../../testing/iframe';
+import {getExistingServiceForDoc} from '../../../../src/service';
+import * as sinon from 'sinon';
 
 
 describe('amp-user-notification', () => {
   let sandbox;
   let iframe;
   let dftAttrs;
-
-  function getUserNotification(attrs = {}) {
-    return createIframePromise().then(iframe_ => {
-      iframe = iframe_;
-      iframe.win.ampExtendedElements = {};
-      return buildElement(iframe.doc, attrs);
-    });
-  }
-
-  function buildElement(doc, attrs = {}) {
-    const elem = doc.createElement('amp-user-notification');
-
-    for (attr in attrs) {
-      elem.setAttribute(attr, attrs[attr]);
-    }
-    const button = doc.createElement('button');
-    button.setAttribute('on', 'tap:' + elem.getAttribute('id') + 'dismiss');
-    elem.appendChild(button);
-    return elem;
-  }
+  let storage;
+  let storageMock;
 
   beforeEach(() => {
     sandbox = sinon.sandbox.create();
@@ -58,15 +41,47 @@ describe('amp-user-notification', () => {
   });
 
   afterEach(() => {
+    if (storageMock) {
+      storageMock.verify();
+    }
     sandbox.restore();
-    sandbox = null;
   });
 
-  it('should NOT have storage key by default', () => {
+  function getUserNotification(attrs = {}) {
+    return createIframePromise().then(iframe_ => {
+      iframe = iframe_;
+      storage = getExistingServiceForDoc(iframe.ampdoc, 'storage');
+      storageMock = sandbox.mock(storage);
+      return buildElement(iframe.doc, iframe.ampdoc, attrs);
+    });
+  }
+
+  function buildElement(doc, ampdoc, attrs = {}) {
+    const elem = doc.createElement('amp-user-notification');
+    elem.getAmpDoc = () => ampdoc;
+
+    for (const attr in attrs) {
+      elem.setAttribute(attr, attrs[attr]);
+    }
+    const button = doc.createElement('button');
+    button.setAttribute('on', 'tap:' + elem.getAttribute('id') + 'dismiss');
+    elem.appendChild(button);
+
+    elem.tryUpgrade_();
+    const impl = elem.implementation_;
+    impl.storagePromise_ = Promise.resolve(storage);
+    impl.userNotificationManager_ = {
+      registerUserNotification: () => {},
+    };
+
+    return elem;
+  }
+
+  it('should have storage key', () => {
     return getUserNotification(dftAttrs).then(el => {
       const impl = el.implementation_;
       impl.buildCallback();
-      expect(impl.storageKey_).to.be.null;
+      expect(impl.storageKey_).to.equal('amp-user-notification:n1');
     });
   });
 
@@ -78,52 +93,319 @@ describe('amp-user-notification', () => {
     });
   });
 
-  it('should require `data-show-if-href`', () => {
-    return getUserNotification({
-      id: 'n1'
-    }).then(el => {
-      const impl = el.implementation_;
-      expect(impl.buildCallback.bind(impl)).to
-          .throw(/should have "data-show-if-href" attribute/);
-    });
-  });
-
-  it('should require `data-dismiss-href`', () => {
+  it('should NOT require `data-show-if-href`', () => {
     return getUserNotification({
       id: 'n1',
-      'data-show-if-href': 'https://www.ampproject.org/get'
     }).then(el => {
       const impl = el.implementation_;
-      expect(impl.buildCallback.bind(impl)).to
-          .throw(/should have "data-dismiss-href" attribute/);
+      expect(impl.buildCallback.bind(impl)).to.not.throw;
     });
   });
 
-  it('should show should return a boolean', () => {
-    stub = sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
-        .returns(Promise.resolve('12345'));
-    stub1 = sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
-        .returns(Promise.resolve({showNotification: true}));
+  it('should NOT require `data-dismiss-href`', () => {
+    return getUserNotification({
+      id: 'n1',
+      'data-show-if-href': 'https://www.ampproject.org/get',
+    }).then(el => {
+      const impl = el.implementation_;
+      expect(impl.buildCallback.bind(impl)).to.not.throw;
+    });
+  });
+
+  it('isDismissed should return true if dismissal has been recorded', () => {
     return getUserNotification(dftAttrs).then(el => {
       const impl = el.implementation_;
       impl.buildCallback();
 
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(true))
+          .once();
+      return expect(impl.isDismissed()).to.eventually.equal(true);
+    });
+  });
+
+  it('isDismissed should return false if dismissal has not been recorded',
+      () => {
+        return getUserNotification(dftAttrs).then(el => {
+          const impl = el.implementation_;
+          impl.buildCallback();
+
+          storageMock.expects('get')
+              .withExactArgs('amp-user-notification:n1')
+              .returns(Promise.resolve(null))
+              .once();
+          return expect(impl.isDismissed()).to.eventually.equal(false);
+        });
+      });
+
+  it('isDismissed should return false if data-persist-dismissal=false', () => {
+    dftAttrs['data-persist-dismissal'] = false;
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get').never();
+      return expect(impl.isDismissed()).to.eventually.equal(false);
+    });
+  });
+
+  it('isDismissed should return false if storage throws error', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.reject('intentional'))
+          .once();
+      return expect(impl.isDismissed()).to.eventually.equal(false);
+    });
+  });
+
+  it('shouldShow should return false if storage has been recorded', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      sandbox.stub(impl, 'getAsyncCid_').throws();
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(true))
+          .once();
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(false);
+      });
+    });
+  });
+
+  it('should skip storage if data-persist-dismissal=false', () => {
+    dftAttrs['data-persist-dismissal'] = false;
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(true))
+          .never();
+
+      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
+          .returns(Promise.resolve('12345'));
+      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
+          .returns(Promise.resolve({showNotification: true}));
+
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(true);
+        expect(cidStub).to.be.calledOnce;
+        expect(showEndpointStub).to.be.calledOnce;
+      });
+    });
+  });
+
+  it('should set persistDismissal to false', () => {
+    return getUserNotification({
+      id: 'n1',
+      layout: 'nodisplay',
+      'data-persist-dismissal': false,
+    }).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+      expect(impl.persistDismissal_).to.be.false;
+    });
+  });
+
+  it('should set persistDismissal to true for any other value', () => {
+    return getUserNotification({
+      id: 'n1',
+      layout: 'nodisplay',
+      'data-persist-dismissal': 'anything',
+    }).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+      expect(impl.persistDismissal_).to.be.true;
+    });
+  });
+
+  it('shouldShow should fallback to xhr and return true', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(false))
+          .once();
+
+      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
+          .returns(Promise.resolve('12345'));
+      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
+          .returns(Promise.resolve({showNotification: true}));
+
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(true);
+        expect(cidStub).to.be.calledOnce;
+        expect(showEndpointStub).to.be.calledOnce;
+      });
+    });
+  });
+
+  it('shouldShow should fallback to xhr and return false', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(false))
+          .once();
+
+      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
+          .returns(Promise.resolve('12345'));
+      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
+          .returns(Promise.resolve({showNotification: false}));
+
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(false);
+        expect(cidStub).to.be.calledOnce;
+        expect(showEndpointStub).to.be.calledOnce;
+      });
+    });
+  });
+
+  it('shouldShow should return true if not stored and no xhr', () => {
+    return getUserNotification({id: 'n1'}).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      sandbox.stub(impl, 'getAsyncCid_').throws();
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.resolve(undefined))
+          .once();
       return impl.shouldShow().then(shouldShow => {
         expect(shouldShow).to.equal(true);
       });
     });
   });
 
+  it('shouldShow should recover from error to xhr', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.reject('intentional'))
+          .once();
+
+      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
+          .returns(Promise.resolve('12345'));
+      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
+          .returns(Promise.resolve({showNotification: true}));
+
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(true);
+        expect(cidStub).to.be.calledOnce;
+        expect(showEndpointStub).to.be.calledOnce;
+      });
+    });
+  });
+
+  it('shouldShow should recover from error and return true with no xhr', () => {
+    return getUserNotification({id: 'n1'}).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      sandbox.stub(impl, 'getAsyncCid_').throws();
+      storageMock.expects('get')
+          .withExactArgs('amp-user-notification:n1')
+          .returns(Promise.reject('intentional'))
+          .once();
+      return impl.shouldShow().then(shouldShow => {
+        expect(shouldShow).to.equal(true);
+      });
+    });
+  });
+
+  it('should store value on dismiss and run post', () => {
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('set')
+          .withExactArgs('amp-user-notification:n1', true)
+          .returns(Promise.resolve())
+          .once();
+      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
+
+      impl.dismiss();
+      expect(postDismissStub).to.be.calledOnce;
+    });
+  });
+
+  it('should ignore post on dismiss if not configured', () => {
+    return getUserNotification({id: 'n1'}).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('set')
+          .withExactArgs('amp-user-notification:n1', true)
+          .returns(Promise.resolve())
+          .once();
+      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
+
+      impl.dismiss();
+      expect(postDismissStub).to.have.not.been.called;
+    });
+  });
+
+  it('should not store value on dismiss if persist-dismissal=false', () => {
+    dftAttrs['data-persist-dismissal'] = false;
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('set')
+          .withExactArgs('amp-user-notification:n1', true)
+          .returns(Promise.resolve())
+          .never();
+      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
+
+      impl.dismiss();
+      expect(postDismissStub).to.be.calledOnce;
+    });
+  });
+
+  it('should not store value on dismiss if persist-dismissal=no', () => {
+    dftAttrs['data-persist-dismissal'] = 'no';
+    return getUserNotification(dftAttrs).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+
+      storageMock.expects('set')
+          .withExactArgs('amp-user-notification:n1', true)
+          .returns(Promise.resolve())
+          .never();
+      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
+
+      impl.dismiss();
+      expect(postDismissStub).to.be.calledOnce;
+    });
+  });
+
   it('should have class `amp-active`', () => {
-    stub = sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
+    sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
         .returns(Promise.resolve('12345'));
-    stub1 = sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
+    sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
         .returns(Promise.resolve({showNotification: true}));
 
     return getUserNotification(dftAttrs).then(el => {
       const impl = el.implementation_;
       impl.buildCallback();
       impl.dialogPromise_ = Promise.resolve();
+      const addToFixedLayerStub = sandbox.stub(
+          impl.getViewport(), 'addToFixedLayer');
 
       expect(el).to.not.have.class('amp-active');
 
@@ -131,15 +413,17 @@ describe('amp-user-notification', () => {
         expect(el).to.not.have.class('amp-active');
         return impl.show().then(() => {
           expect(el).to.have.class('amp-active');
+          expect(addToFixedLayerStub).to.be.calledOnce;
+          expect(addToFixedLayerStub.getCall(0).args[0]).to.equal(el);
         });
       });
     });
   });
 
   it('should not have `amp-active`', () => {
-    stub = sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
+    sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
         .returns(Promise.resolve('12345'));
-    stub1 = sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
+    sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
         .returns(Promise.resolve({showNotification: false}));
 
     return getUserNotification(dftAttrs).then(el => {
@@ -161,18 +445,20 @@ describe('amp-user-notification', () => {
   });
 
   it('should have `amp-hidden` and no `amp-active`', () => {
-    stub = sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
+    sandbox.stub(AmpUserNotification.prototype, 'getAsyncCid_')
         .returns(Promise.resolve('12345'));
-    stub1 = sandbox.stub(AmpUserNotification.prototype, 'getShowEndpoint_')
-        .returns(Promise.resolve({showNotification: true}));
-    stub2 = sandbox.stub(AmpUserNotification.prototype, 'postDismissEnpoint_')
-        .returns(Promise.resolve());
+    sandbox.stub(AmpUserNotification.prototype,
+        'getShowEndpoint_').returns(Promise.resolve({showNotification: true}));
+    const stub2 = sandbox.stub(AmpUserNotification.prototype,
+        'postDismissEnpoint_').returns(Promise.resolve());
 
     return getUserNotification(dftAttrs).then(el => {
       const impl = el.implementation_;
       impl.buildCallback();
       impl.dialogPromise_ = Promise.resolve();
       impl.dialogResolve_ = function() {};
+      const removeFromFixedLayerStub = sandbox.stub(
+          impl.getViewport(), 'removeFromFixedLayer');
 
       expect(el).to.not.have.class('amp-active');
 
@@ -186,7 +472,25 @@ describe('amp-user-notification', () => {
         expect(el).to.not.have.class('amp-active');
         expect(el).to.have.class('amp-hidden');
         expect(stub2.calledOnce).to.be.true;
+        expect(removeFromFixedLayerStub).to.be.calledOnce;
+        expect(removeFromFixedLayerStub.getCall(0).args[0]).to.equal(el);
       });
+    });
+  });
+
+  it('should have a default `role` if unspecified', () => {
+    return getUserNotification({id: 'n1'}).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+      expect(el.getAttribute('role')).to.equal('alert');
+    });
+  });
+
+  it('should not override `role` if specified', () => {
+    return getUserNotification({id: 'n1', role: 'status'}).then(el => {
+      const impl = el.implementation_;
+      impl.buildCallback();
+      expect(el.getAttribute('role')).to.equal('status');
     });
   });
 
@@ -227,14 +531,35 @@ describe('amp-user-notification', () => {
       service.nextInQueue_ = service.managerReadyPromise_;
       tag = {
         shouldShow: () => Promise.resolve(true),
-        show: () => Promise.resolve()
+        show: () => Promise.resolve(),
       };
     });
 
-    it('should be able to get a resolved service', () => {
-      service.registerUserNotification('n1', tag);
+    it('getNotificaiton should return notification object after ' +
+        'registration', () => {
+      return getUserNotification().then(element => {
+        const notification = new AmpUserNotification(element);
+        service.registerUserNotification('n1', notification);
+        return Promise.all([
+          expect(service.getNotification('n1'))
+              .to.eventually.equal(notification),
+          expect(service.getNotification('n2'))
+              .to.eventually.equal(undefined),
+        ]);
+      });
+    });
 
-      return service.get('n1');
+    it('should be able to get AmpUserNotification object by ID', () => {
+      let userNotification;
+
+      return getUserNotification().then(element => {
+        return new AmpUserNotification(element);
+      }).then(un => {
+        userNotification = un;
+        service.registerUserNotification('n1', userNotification);
+      }).then(() => {
+        return expect(service.get('n1')).to.eventually.equal(userNotification);
+      });
     });
 
     it('should queue up multiple amp-user-notification elements', () => {
@@ -265,240 +590,6 @@ describe('amp-user-notification', () => {
       const get = service.get.bind(service, 'n4');
       expect(get).to.not.throw();
       expect(get().then).to.be.function;
-    });
-  });
-
-});
-
-
-describe('amp-user-notification with storage', () => {
-  let iframe;
-  let dftAttrs;
-  let sandbox;
-  let storage;
-  let storageMock;
-
-  beforeEach(() => {
-    sandbox = sinon.sandbox.create();
-    storage = {
-      get: () => {},
-      set: () => {},
-    };
-    storageMock = sandbox.mock(storage);
-    dftAttrs = {
-      id: 'n1',
-      'data-show-if-href': 'https://www.ampproject.org/get/here',
-      'data-dismiss-href': 'https://www.ampproject.org/post/here',
-      'layout': 'nodisplay',
-    };
-  });
-
-  afterEach(() => {
-    sandbox.restore();
-    sandbox = null;
-  });
-
-  function getUserNotification(attrs = {}) {
-    return createIframePromise().then(iframe_ => {
-      iframe = iframe_;
-      iframe.win.ampExtendedElements = {};
-      return buildElement(iframe.doc, attrs);
-    });
-  }
-
-  function buildElement(doc, attrs = {}) {
-    const elem = doc.createElement('amp-user-notification');
-
-    for (attr in attrs) {
-      elem.setAttribute(attr, attrs[attr]);
-    }
-    const button = doc.createElement('button');
-    button.setAttribute('on', 'tap:' + elem.getAttribute('id') + 'dismiss');
-    elem.appendChild(button);
-
-    const impl = elem.implementation_;
-    impl.isStorageEnabled_ = true;
-    impl.storagePromise_ = Promise.resolve(storage);
-    impl.userNotificationManager_ = {
-      registerUserNotification: () => {}
-    };
-
-    return elem;
-  }
-
-  it('should have storage key', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-      expect(impl.storageKey_).to.equal('amp-user-notification:n1');
-    });
-  });
-
-  it('should NOT require `data-show-if-href`', () => {
-    return getUserNotification({
-      id: 'n1'
-    }).then(el => {
-      const impl = el.implementation_;
-      expect(impl.buildCallback.bind(impl)).to.not.throw;
-    });
-  });
-
-  it('should NOT require `data-dismiss-href`', () => {
-    return getUserNotification({
-      id: 'n1',
-      'data-show-if-href': 'https://www.ampproject.org/get'
-    }).then(el => {
-      const impl = el.implementation_;
-      expect(impl.buildCallback.bind(impl)).to.not.throw;
-    });
-  });
-
-  it('shouldShow should return false if storage has been recorded', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      sandbox.stub(impl, 'getAsyncCid_').throws();
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.resolve(true))
-          .once();
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(false);
-      });
-    });
-  });
-
-  it('shouldShow should fallback to xhr and return true', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.resolve(false))
-          .once();
-
-      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
-          .returns(Promise.resolve('12345'));
-      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
-          .returns(Promise.resolve({showNotification: true}));
-
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(true);
-        expect(cidStub.callCount).to.equal(1);
-        expect(showEndpointStub.callCount).to.equal(1);
-      });
-    });
-  });
-
-  it('shouldShow should fallback to xhr and return false', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.resolve(false))
-          .once();
-
-      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
-          .returns(Promise.resolve('12345'));
-      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
-          .returns(Promise.resolve({showNotification: false}));
-
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(false);
-        expect(cidStub.callCount).to.equal(1);
-        expect(showEndpointStub.callCount).to.equal(1);
-      });
-    });
-  });
-
-  it('shouldShow should return true if not stored and no xhr', () => {
-    return getUserNotification({id: 'n1'}).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      sandbox.stub(impl, 'getAsyncCid_').throws();
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.resolve(undefined))
-          .once();
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(true);
-      });
-    });
-  });
-
-  it('shouldShow should recover from error to xhr', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.reject('intentional'))
-          .once();
-
-      const cidStub = sandbox.stub(impl, 'getAsyncCid_')
-          .returns(Promise.resolve('12345'));
-      const showEndpointStub = sandbox.stub(impl, 'getShowEndpoint_')
-          .returns(Promise.resolve({showNotification: true}));
-
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(true);
-        expect(cidStub.callCount).to.equal(1);
-        expect(showEndpointStub.callCount).to.equal(1);
-      });
-    });
-  });
-
-  it('shouldShow should recover from error and return true with no xhr', () => {
-    return getUserNotification({id: 'n1'}).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      sandbox.stub(impl, 'getAsyncCid_').throws();
-      storageMock.expects('get')
-          .withExactArgs('amp-user-notification:n1')
-          .returns(Promise.reject('intentional'))
-          .once();
-      return impl.shouldShow().then(shouldShow => {
-        expect(shouldShow).to.equal(true);
-      });
-    });
-  });
-
-  it('should store value on dismiss and run post', () => {
-    return getUserNotification(dftAttrs).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      storageMock.expects('set')
-          .withExactArgs('amp-user-notification:n1', true)
-          .returns(Promise.resolve())
-          .once();
-      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
-
-      impl.dismiss();
-      expect(postDismissStub.callCount).to.equal(1);
-    });
-  });
-
-  it('should ignore post on dismiss if not configured', () => {
-    return getUserNotification({id: 'n1'}).then(el => {
-      const impl = el.implementation_;
-      impl.buildCallback();
-
-      storageMock.expects('set')
-          .withExactArgs('amp-user-notification:n1', true)
-          .returns(Promise.resolve())
-          .once();
-      const postDismissStub = sandbox.stub(impl, 'postDismissEnpoint_');
-
-      impl.dismiss();
-      expect(postDismissStub.callCount).to.equal(0);
     });
   });
 });
